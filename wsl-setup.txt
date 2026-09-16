@@ -48,7 +48,11 @@ export WINRM_HOST=$(ip route show default | awk '{print $3}')
 # make sure you use the proper domain\user here
 export WINRM_USER='{domain}\{user}'
 
+#fails but makes a solid attempt
 ansible-playbook \
   -i /mnt/c/dev/MyDev/ansible/inventory.ini \
   /mnt/c/dev/MyDev/ansible/setup-machine.yml \
   -k
+
+#fails because of http connection, diagnosing
+bash /mnt/c/dev/MyDev/ansible/run-setup.sh /mnt/c/dev/MyDev/ansible
