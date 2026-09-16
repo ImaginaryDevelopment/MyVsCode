@@ -16,3 +16,16 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine -Force
 
 # Verify npm version:
 npm -v # Should print "11.19.0".
+
+# make sure remoting is setup and working
+
+Enable-PSRemoting -Force
+# WinRM is already set up to receive requests on this computer.
+# WinRM is already set up for remote management on this computer.
+Get-ChildItem WSMan:\localhost\Listener | Format-Table Address, Transport, Port, Enabled
+
+Get-NetTCPConnection -LocalPort 5985 | Select-Object LocalAddress, State
+
+New-NetFirewallRule -DisplayName 'WinRM from WSL' -Direction Inbound -Protocol TCP -LocalPort 5985 -Action Allow -RemoteAddress 172.16.0.0/12 -ErrorAction SilentlyContinue
+
+Enable-WSManCredSSP -Role Server -Force

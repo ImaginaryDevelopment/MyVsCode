@@ -59,3 +59,12 @@ ansible-playbook \
 # WinRM is running; it is only listening on IPv6 ([::]:5985). 
 # WSL talks to 172.27.80.1 over IPv4, so the connection sits until it times out.
 bash /mnt/c/dev/MyDev/ansible/run-setup.sh /mnt/c/dev/MyDev/ansible
+
+
+sudo apt install -y krb5-user libkrb5-dev python3-dev gcc
+source ~/.venvs/winrm/bin/activate
+pip install 'pywinrm[kerberos]'
+kinit {user}@{domain}
+export WINRM_HOST={machine}.{domain}
+export WINRM_TRANSPORT=kerberos
+bash /mnt/c/dev/MyDev/ansible/run-setup.sh '{user}@{domain}'
