@@ -1,0 +1,43 @@
+sudo apt update
+sudo apt install python3-pip
+
+#begin AI instructions to get pywinrm
+sudo apt install -y python3-venv python3-full
+python3 -m venv ~/.venvs/winrm
+source ~/.venvs/winrm/bin/activate
+
+# next steps fail without windows cert configuration
+
+sudo apt update
+sudo apt install -y openssl
+# grab last begin cert/end cert into a file
+echo | openssl s_client -showcerts -connect pypi.org:443 2>/dev/null
+
+# modify as needed the source, if it is coming from windows, /mnt/c/dev/corp-proxy.crt
+sudo cp corp-proxy.crt /usr/local/share/ca-certificates/corp-proxy.crt
+
+sudo update-ca-certificates
+
+source ~/.venvs/winrm/bin/activate
+export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+pip install pywinrm
+
+# pip install ansible fails. markupsafe appears to be the failing package, going to try installing that manually from source
+source ~/.venvs/winrm/bin/activate
+
+sudo apt install -y python3-dev gcc build-essential
+
+pip cache purge
+pip install --no-cache-dir --no-binary MarkupSafe MarkupSafe
+
+# pip install full ansible failed too many times in spite of work around attempts.
+
+pip install --no-cache-dir ansible-core
+pip install --no-cache-dir pywinrm
+ansible --version
+
+cd ~
+source ~/.venvs/winrm/bin/activate
+ansible-galaxy collection install git+https://github.com/ansible-collections/ansible.windows.git --no-cache
+
+ansible-playbook /mnt/c/dev/mydev/ansible/setup-machine.yml -k
