@@ -41,3 +41,14 @@ source ~/.venvs/winrm/bin/activate
 ansible-galaxy collection install git+https://github.com/ansible-collections/ansible.windows.git --no-cache
 
 ansible-playbook /mnt/c/dev/mydev/ansible/setup-machine.yml -k
+
+source ~/.venvs/winrm/bin/activate
+cd ~
+export WINRM_HOST=$(ip route show default | awk '{print $3}')
+# make sure you use the proper domain\user here
+export WINRM_USER='{domain}\{user}'
+
+ansible-playbook \
+  -i /mnt/c/dev/MyDev/ansible/inventory.ini \
+  /mnt/c/dev/MyDev/ansible/setup-machine.yml \
+  -k
