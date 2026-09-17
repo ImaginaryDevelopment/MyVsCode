@@ -12,7 +12,7 @@
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>BAnalyzer</PackageId>
     <Version>1.0.0</Version>
-    <Description>Roslyn analyzers and code fixes for Visual Studio and VS Code. Install this package on a C# project to get editor squiggles, the Problems/Error List, and light-bulb fixes.</Description>
+    <Description>Roslyn analyzers and code fixes for Visual Studio and VS Code. Install this package on a C# or Visual Basic project to get editor squiggles, the Problems/Error List, and light-bulb fixes.</Description>
     <PackageTags>roslyn;analyzer;analyzers;codefix;diagnostics</PackageTags>
     <NoWarn>$(NoWarn);NU5128;FS2003</NoWarn>
   </PropertyGroup>
@@ -29,6 +29,8 @@
     <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" PrivateAssets="all" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" PrivateAssets="all" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.8.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.VisualBasic" Version="4.8.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.VisualBasic.Workspaces" Version="4.8.0" PrivateAssets="all" />
     <PackageReference Include="System.Composition" Version="8.0.0" PrivateAssets="all" />
   </ItemGroup>
 
@@ -46,7 +48,9 @@
   <Target Name="PackAnalyzerAssemblies">
     <ItemGroup>
       <TfmSpecificPackageFile Include="$(TargetPath)" PackagePath="analyzers/dotnet/cs" />
+      <TfmSpecificPackageFile Include="$(TargetPath)" PackagePath="analyzers/dotnet/vb" />
       <TfmSpecificPackageFile Include="$(PkgFSharp_Core)\lib\netstandard2.0\FSharp.Core.dll" PackagePath="analyzers/dotnet/cs" />
+      <TfmSpecificPackageFile Include="$(PkgFSharp_Core)\lib\netstandard2.0\FSharp.Core.dll" PackagePath="analyzers/dotnet/vb" />
     </ItemGroup>
   </Target>
 

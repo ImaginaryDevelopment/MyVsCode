@@ -2,11 +2,10 @@ namespace BAnalyzer
 
 open System.Collections.Immutable
 open Microsoft.CodeAnalysis
-open Microsoft.CodeAnalysis.CSharp
-open Microsoft.CodeAnalysis.CSharp.Syntax
 open Microsoft.CodeAnalysis.Diagnostics
+open Microsoft.CodeAnalysis.Operations
 
-[<DiagnosticAnalyzer(LanguageNames.CSharp)>]
+[<DiagnosticAnalyzer(LanguageNames.CSharp, LanguageNames.VisualBasic)>]
 type DateTimeNowAnalyzer() =
     inherit DiagnosticAnalyzer()
 
@@ -16,19 +15,20 @@ type DateTimeNowAnalyzer() =
     override _.Initialize(context: AnalysisContext) =
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None)
         context.EnableConcurrentExecution()
-        context.RegisterSyntaxNodeAction(
-            DateTimeNowAnalyzer.AnalyzeMemberAccess,
-            SyntaxKind.SimpleMemberAccessExpression
+        context.RegisterOperationAction(
+            DateTimeNowAnalyzer.AnalyzePropertyReference,
+            OperationKind.PropertyReference
         )
 
-    static member AnalyzeMemberAccess(context: SyntaxNodeAnalysisContext) =
-        match context.Node with
-        | :? MemberAccessExpressionSyntax as memberAccess when
-            memberAccess.Name.Identifier.ValueText = "Now" ->
-            match context.SemanticModel.GetSymbolInfo(memberAccess, context.CancellationToken).Symbol with
-            | :? IPropertySymbol as property when
-                property.Name = "Now"
-                && property.ContainingType.SpecialType = SpecialType.System_DateTime ->
-                context.ReportDiagnostic(Diagnostic.Create(Rules.PreferUtcNow, memberAccess.GetLocation()))
-            | _ -> ()
+    static member AnalyzePropertyReference(context: OperationAnalysisContext) =
+        match context.Operation with
+        | :? IPropertyReferenceOperation as propertyReference ->
+            let property = propertyReference.Property
+
+            if property.Name = "Now"
+               && not (isNull property.ContainingType)
+               && property.ContainingType.SpecialType = SpecialType.System_DateTime then
+                context.ReportDiagnostic(
+                    Diagnostic.Create(Rules.PreferUtcNow, propertyReference.Syntax.GetLocation())
+                )
         | _ -> ()

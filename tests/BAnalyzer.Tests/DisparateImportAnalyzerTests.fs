@@ -1,40 +1,10 @@
 module BAnalyzer.Tests.DisparateImportAnalyzerTests
 
 open BAnalyzer
-open System
-open System.Collections.Immutable
-open System.IO
-open System.Threading
-open Microsoft.CodeAnalysis
-open Microsoft.CodeAnalysis.CSharp
-open Microsoft.CodeAnalysis.Diagnostics
 open Xunit
 
-let private metadataReferences () =
-    let runtime = Path.Combine(Path.GetDirectoryName(typeof<obj>.Assembly.Location), "System.Runtime.dll")
-
-    [ typeof<obj>.Assembly.Location; runtime ]
-    |> List.filter File.Exists
-    |> List.distinct
-    |> List.map (fun path -> MetadataReference.CreateFromFile(path) :> MetadataReference)
-    |> Array.ofList
-
-let private getDiagnostics (source: string) =
-    let tree = CSharpSyntaxTree.ParseText(source)
-    let compilation =
-        CSharpCompilation.Create(
-            "AnalyzerTest",
-            [| tree |],
-            metadataReferences (),
-            CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
-        )
-
-    let analyzers = ImmutableArray.Create<DiagnosticAnalyzer>(DisparateImportAnalyzer())
-    compilation
-        .WithAnalyzers(analyzers)
-        .GetAnalyzerDiagnosticsAsync(CancellationToken.None)
-        .GetAwaiter()
-        .GetResult()
+let private getCSharpDiagnostics = AnalyzerTestHost.getCSharpDiagnostics (DisparateImportAnalyzer())
+let private getVisualBasicDiagnostics = AnalyzerTestHost.getVisualBasicDiagnostics (DisparateImportAnalyzer())
 
 [<Fact>]
 let ``BA0002 is reported for System.Data.Linq and System.Drawing`` () =
@@ -46,7 +16,7 @@ let ``BA0002 is reported for System.Data.Linq and System.Drawing`` () =
         public class C { }
         """
 
-    let diagnostics = getDiagnostics source
+    let diagnostics = getCSharpDiagnostics source
     Assert.Contains(diagnostics, fun d -> d.Id = Rules.DisparateImports.Id)
     Assert.Contains(diagnostics, fun d -> d.GetMessage().Contains("System.Data.Linq") && d.GetMessage().Contains("System.Drawing"))
 
@@ -60,7 +30,7 @@ let ``BA0002 is not reported for two data-access imports`` () =
         public class C { }
         """
 
-    let diagnostics = getDiagnostics source
+    let diagnostics = getCSharpDiagnostics source
     Assert.DoesNotContain(diagnostics, fun d -> d.Id = Rules.DisparateImports.Id)
 
 [<Fact>]
@@ -72,7 +42,7 @@ let ``BA0002 is not reported for a single layer-specific import`` () =
         public class C { }
         """
 
-    let diagnostics = getDiagnostics source
+    let diagnostics = getCSharpDiagnostics source
     Assert.DoesNotContain(diagnostics, fun d -> d.Id = Rules.DisparateImports.Id)
 
 [<Fact>]
@@ -86,7 +56,7 @@ let ``BA0002 is not reported for ordinary BCL imports`` () =
         public class C { }
         """
 
-    let diagnostics = getDiagnostics source
+    let diagnostics = getCSharpDiagnostics source
     Assert.DoesNotContain(diagnostics, fun d -> d.Id = Rules.DisparateImports.Id)
 
 [<Fact>]
@@ -99,5 +69,76 @@ let ``BA0002 is reported for presentation and web imports`` () =
         public class C { }
         """
 
-    let diagnostics = getDiagnostics source
+    let diagnostics = getCSharpDiagnostics source
+    Assert.Contains(diagnostics, fun d -> d.Id = Rules.DisparateImports.Id)
+
+[<Fact>]
+let ``BA0002 is reported for System.Data.Linq and System.Drawing in Visual Basic`` () =
+    let source =
+        """
+        Imports System.Data.Linq
+        Imports System.Drawing
+
+        Public Class C
+        End Class
+        """
+
+    let diagnostics = getVisualBasicDiagnostics source
+    Assert.Contains(diagnostics, fun d -> d.Id = Rules.DisparateImports.Id)
+    Assert.Contains(diagnostics, fun d -> d.GetMessage().Contains("System.Data.Linq") && d.GetMessage().Contains("System.Drawing"))
+
+[<Fact>]
+let ``BA0002 is not reported for two data-access imports in Visual Basic`` () =
+    let source =
+        """
+        Imports System.Data
+        Imports System.Data.Linq
+
+        Public Class C
+        End Class
+        """
+
+    let diagnostics = getVisualBasicDiagnostics source
+    Assert.DoesNotContain(diagnostics, fun d -> d.Id = Rules.DisparateImports.Id)
+
+[<Fact>]
+let ``BA0002 is not reported for a single layer-specific import in Visual Basic`` () =
+    let source =
+        """
+        Imports System.Data.Linq
+
+        Public Class C
+        End Class
+        """
+
+    let diagnostics = getVisualBasicDiagnostics source
+    Assert.DoesNotContain(diagnostics, fun d -> d.Id = Rules.DisparateImports.Id)
+
+[<Fact>]
+let ``BA0002 is not reported for ordinary BCL imports in Visual Basic`` () =
+    let source =
+        """
+        Imports System
+        Imports System.Collections.Generic
+        Imports System.Linq
+
+        Public Class C
+        End Class
+        """
+
+    let diagnostics = getVisualBasicDiagnostics source
+    Assert.DoesNotContain(diagnostics, fun d -> d.Id = Rules.DisparateImports.Id)
+
+[<Fact>]
+let ``BA0002 is reported for presentation and web imports in Visual Basic`` () =
+    let source =
+        """
+        Imports System.Windows.Forms
+        Imports Microsoft.AspNetCore.Mvc
+
+        Public Class C
+        End Class
+        """
+
+    let diagnostics = getVisualBasicDiagnostics source
     Assert.Contains(diagnostics, fun d -> d.Id = Rules.DisparateImports.Id)

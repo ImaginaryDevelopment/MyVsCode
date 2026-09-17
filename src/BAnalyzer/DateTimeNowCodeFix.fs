@@ -8,10 +8,8 @@ open System.Threading.Tasks
 open Microsoft.CodeAnalysis
 open Microsoft.CodeAnalysis.CodeActions
 open Microsoft.CodeAnalysis.CodeFixes
-open Microsoft.CodeAnalysis.CSharp
-open Microsoft.CodeAnalysis.CSharp.Syntax
 
-[<ExportCodeFixProvider(LanguageNames.CSharp, Name = "BAnalyzer.BA0001")>]
+[<ExportCodeFixProvider(LanguageNames.CSharp, LanguageNames.VisualBasic, Name = "BAnalyzer.BA0001")>]
 [<Shared>]
 type DateTimeNowCodeFix() =
     inherit CodeFixProvider()
@@ -28,24 +26,44 @@ type DateTimeNowCodeFix() =
         task {
             let! root = context.Document.GetSyntaxRootAsync(context.CancellationToken)
             let diagnostic = Seq.head context.Diagnostics
-            match root.FindNode(diagnostic.Location.SourceSpan) with
-            | :? MemberAccessExpressionSyntax as memberAccess ->
+            let node = root.FindNode(diagnostic.Location.SourceSpan, getInnermostNodeForTie = true)
+
+            match DateTimeNowCodeFix.TryReplaceMemberAccess(node) with
+            | None -> ()
+            | Some(original, replacement) ->
                 let createChangedDocument =
                     Func<CancellationToken, Task<Document>>(fun ct ->
-                        DateTimeNowCodeFix.UseUtcNowAsync(context.Document, memberAccess, ct)
+                        DateTimeNowCodeFix.ReplaceAsync(context.Document, original, replacement, ct)
                     )
 
                 context.RegisterCodeFix(CodeAction.Create(title, createChangedDocument, title), diagnostic)
-            | _ -> ()
         }
         :> Task
 
-    static member UseUtcNowAsync
-        (document: Document, memberAccess: MemberAccessExpressionSyntax, cancellationToken: CancellationToken)
+    static member TryReplaceMemberAccess(node: SyntaxNode) =
+        let rec walk (current: SyntaxNode) =
+            match current with
+            | null -> None
+            | :? Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax as memberAccess ->
+                let replacement =
+                    memberAccess.WithName(Microsoft.CodeAnalysis.CSharp.SyntaxFactory.IdentifierName("UtcNow"))
+                    :> SyntaxNode
+
+                Some(memberAccess :> SyntaxNode, replacement)
+            | :? Microsoft.CodeAnalysis.VisualBasic.Syntax.MemberAccessExpressionSyntax as memberAccess ->
+                let replacement =
+                    memberAccess.WithName(Microsoft.CodeAnalysis.VisualBasic.SyntaxFactory.IdentifierName("UtcNow"))
+                    :> SyntaxNode
+
+                Some(memberAccess :> SyntaxNode, replacement)
+            | _ -> walk current.Parent
+
+        walk node
+
+    static member ReplaceAsync
+        (document: Document, node: SyntaxNode, replacement: SyntaxNode, cancellationToken: CancellationToken)
         =
         task {
             let! root = document.GetSyntaxRootAsync(cancellationToken)
-            let utcNow = memberAccess.WithName(SyntaxFactory.IdentifierName("UtcNow"))
-            let newRoot = root.ReplaceNode(memberAccess, utcNow)
-            return document.WithSyntaxRoot(newRoot)
+            return document.WithSyntaxRoot(root.ReplaceNode(node, replacement))
         }

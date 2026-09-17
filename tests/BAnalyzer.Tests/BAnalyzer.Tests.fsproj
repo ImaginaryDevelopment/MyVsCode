@@ -5,12 +5,14 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="AnalyzerTestHost.fs" />
     <Compile Include="DateTimeNowAnalyzerTests.fs" />
     <Compile Include="DisparateImportAnalyzerTests.fs" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.8.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.VisualBasic.Workspaces" Version="4.8.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.0.2">
