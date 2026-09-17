@@ -7,9 +7,13 @@
     <Project Path="src/BAnalyzer/BAnalyzer.fsproj" />
     <Project Path="src/BPlug.Core/BPlug.Core.fsproj" />
     <Project Path="src/BPlug.Server/BPlug.Server.fsproj" />
+    <Project Path="src/BPlug.VisualStudio/BPlug.VisualStudio.csproj" />
+    <Project Path="src/BPlug.VSCode/BPlug.VSCode.fsproj" />
+    <Project Path="src/BPlug.Workspace/BPlug.Workspace.fsproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/BAnalyzer.Tests/BAnalyzer.Tests.fsproj" />
     <Project Path="tests/BPlug.Core.Tests/BPlug.Core.Tests.fsproj" />
+    <Project Path="tests/BPlug.Workspace.Tests/BPlug.Workspace.Tests.fsproj" />
   </Folder>
 </Solution>

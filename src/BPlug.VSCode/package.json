@@ -1,0 +1,25 @@
+{
+  "name": "bplug",
+  "displayName": "BPlug",
+  "description": "BPlug analysis for Visual Studio Code. Starts BPlug.Server; does not load Roslyn in the extension host.",
+  "version": "0.0.1",
+  "publisher": "bplug",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/Extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "bplug.analyze",
+        "title": "BPlug: Analyze Open Document"
+      }
+    ]
+  }
+}
