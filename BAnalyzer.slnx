@@ -1,11 +1,15 @@
 <Solution>
   <Folder Name="/samples/">
     <Project Path="samples/BAnalyzer.Sample/BAnalyzer.Sample.csproj" />
+    <Project Path="samples/BAnalyzer.Sample.VB/BAnalyzer.Sample.VB.vbproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/BAnalyzer/BAnalyzer.fsproj" />
+    <Project Path="src/BPlug.Core/BPlug.Core.fsproj" />
+    <Project Path="src/BPlug.Server/BPlug.Server.fsproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/BAnalyzer.Tests/BAnalyzer.Tests.fsproj" />
+    <Project Path="tests/BPlug.Core.Tests/BPlug.Core.Tests.fsproj" />
   </Folder>
 </Solution>
