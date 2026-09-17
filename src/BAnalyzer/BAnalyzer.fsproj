@@ -21,6 +21,7 @@
     <Compile Include="Rules.fs" />
     <Compile Include="DateTimeNowAnalyzer.fs" />
     <Compile Include="DateTimeNowCodeFix.fs" />
+    <Compile Include="DisparateImportAnalyzer.fs" />
   </ItemGroup>
 
   <ItemGroup>

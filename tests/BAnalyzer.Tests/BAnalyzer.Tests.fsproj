@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <Compile Include="DateTimeNowAnalyzerTests.fs" />
+    <Compile Include="DisparateImportAnalyzerTests.fs" />
   </ItemGroup>
 
   <ItemGroup>
