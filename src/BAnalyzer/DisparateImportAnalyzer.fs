@@ -48,46 +48,17 @@ module ApplicationLayers =
                 None
         )
 
-[<DiagnosticAnalyzer(LanguageNames.CSharp, LanguageNames.VisualBasic)>]
-type DisparateImportAnalyzer() =
-    inherit DiagnosticAnalyzer()
-
-    override _.SupportedDiagnostics =
-        ImmutableArray.Create(Rules.DisparateImports)
-
-    override _.Initialize(context: AnalysisContext) =
-        context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None)
-        context.EnableConcurrentExecution()
-        context.RegisterSyntaxNodeAction(
-            DisparateImportAnalyzer.AnalyzeCompilationUnit,
-            Microsoft.CodeAnalysis.CSharp.SyntaxKind.CompilationUnit
-        )
-        context.RegisterSyntaxNodeAction(
-            DisparateImportAnalyzer.AnalyzeCompilationUnit,
-            Microsoft.CodeAnalysis.VisualBasic.SyntaxKind.CompilationUnit
-        )
-
-    static member AnalyzeCompilationUnit(context: SyntaxNodeAnalysisContext) =
+module internal DisparateImportAnalysis =
+    let report
+        (context: SyntaxNodeAnalysisContext)
+        (imports: (string * Location * int) seq)
+        =
         let firstImportByLayer = Dictionary<ApplicationLayers.Layer, struct (string * Location * int)>()
 
-        let consider (namespaceName: string) (location: Location) (spanStart: int) =
+        for namespaceName, location, spanStart in imports do
             match ApplicationLayers.tryGetLayer namespaceName with
             | Some layer when not (firstImportByLayer.ContainsKey(layer)) ->
                 firstImportByLayer.Add(layer, struct (namespaceName, location, spanStart))
-            | _ -> ()
-
-        for node in context.Node.DescendantNodesAndSelf() do
-            match node with
-            | :? Microsoft.CodeAnalysis.CSharp.Syntax.UsingDirectiveSyntax as usingDirective when
-                not (isNull usingDirective.Name) ->
-                consider (usingDirective.Name.ToString()) (usingDirective.GetLocation()) usingDirective.SpanStart
-            | :? Microsoft.CodeAnalysis.VisualBasic.Syntax.ImportsStatementSyntax as importsStatement ->
-                for clause in importsStatement.ImportsClauses do
-                    match clause with
-                    | :? Microsoft.CodeAnalysis.VisualBasic.Syntax.SimpleImportsClauseSyntax as simple when
-                        not (isNull simple.Name) ->
-                        consider (simple.Name.ToString()) (simple.GetLocation()) simple.SpanStart
-                    | _ -> ()
             | _ -> ()
 
         if firstImportByLayer.Count >= 2 then
@@ -104,7 +75,7 @@ type DisparateImportAnalyzer() =
             let struct (firstName, _, _) = first.Value
             let struct (secondName, secondLocation, _) = second.Value
 
-            let diagnostic =
+            context.ReportDiagnostic(
                 Diagnostic.Create(
                     Rules.DisparateImports,
                     secondLocation,
@@ -113,5 +84,78 @@ type DisparateImportAnalyzer() =
                     secondName,
                     ApplicationLayers.displayName second.Key
                 )
+            )
 
-            context.ReportDiagnostic(diagnostic)
+// C# `using` and VB `Imports` are different syntax types, so each language
+// needs its own DiagnosticAnalyzer. They cannot share one Initialize method:
+// registering both SyntaxKinds in the same method body would JIT-load
+// Microsoft.CodeAnalysis.CSharp into the VB compiler (and vice versa). vbc
+// does not ship the C# assembly, and a combined analyzer throws
+// FileNotFoundException (AD0001) instead of reporting BA0002.
+[<DiagnosticAnalyzer(LanguageNames.CSharp)>]
+type DisparateImportAnalyzer() =
+    inherit DiagnosticAnalyzer()
+
+    override _.SupportedDiagnostics =
+        ImmutableArray.Create(Rules.DisparateImports)
+
+    override _.Initialize(context: AnalysisContext) =
+        context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None)
+        context.EnableConcurrentExecution()
+        context.RegisterSyntaxNodeAction(
+            DisparateImportAnalyzer.AnalyzeCompilationUnit,
+            Microsoft.CodeAnalysis.CSharp.SyntaxKind.CompilationUnit
+        )
+
+    static member AnalyzeCompilationUnit(context: SyntaxNodeAnalysisContext) =
+        if context.Compilation.Language <> LanguageNames.CSharp then
+            ()
+        else
+            let imports =
+                context.Node.DescendantNodesAndSelf()
+                |> Seq.choose (fun node ->
+                    match node with
+                    | :? Microsoft.CodeAnalysis.CSharp.Syntax.UsingDirectiveSyntax as usingDirective when
+                        not (isNull usingDirective.Name) ->
+                        Some(usingDirective.Name.ToString(), usingDirective.GetLocation(), usingDirective.SpanStart)
+                    | _ -> None
+                )
+
+            DisparateImportAnalysis.report context imports
+
+[<DiagnosticAnalyzer(LanguageNames.VisualBasic)>]
+type DisparateImportVisualBasicAnalyzer() =
+    inherit DiagnosticAnalyzer()
+
+    override _.SupportedDiagnostics =
+        ImmutableArray.Create(Rules.DisparateImports)
+
+    override _.Initialize(context: AnalysisContext) =
+        context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None)
+        context.EnableConcurrentExecution()
+        context.RegisterSyntaxNodeAction(
+            DisparateImportVisualBasicAnalyzer.AnalyzeCompilationUnit,
+            Microsoft.CodeAnalysis.VisualBasic.SyntaxKind.CompilationUnit
+        )
+
+    static member AnalyzeCompilationUnit(context: SyntaxNodeAnalysisContext) =
+        if context.Compilation.Language <> LanguageNames.VisualBasic then
+            ()
+        else
+            let imports =
+                context.Node.DescendantNodesAndSelf()
+                |> Seq.collect (fun node ->
+                    match node with
+                    | :? Microsoft.CodeAnalysis.VisualBasic.Syntax.ImportsStatementSyntax as importsStatement ->
+                        importsStatement.ImportsClauses
+                        |> Seq.choose (fun clause ->
+                            match clause with
+                            | :? Microsoft.CodeAnalysis.VisualBasic.Syntax.SimpleImportsClauseSyntax as simple when
+                                not (isNull simple.Name) ->
+                                Some(simple.Name.ToString(), simple.GetLocation(), simple.SpanStart)
+                            | _ -> None
+                        )
+                    | _ -> Seq.empty
+                )
+
+            DisparateImportAnalysis.report context imports

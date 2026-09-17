@@ -4,7 +4,8 @@ open BAnalyzer
 open Xunit
 
 let private getCSharpDiagnostics = AnalyzerTestHost.getCSharpDiagnostics (DisparateImportAnalyzer())
-let private getVisualBasicDiagnostics = AnalyzerTestHost.getVisualBasicDiagnostics (DisparateImportAnalyzer())
+let private getVisualBasicDiagnostics =
+    AnalyzerTestHost.getVisualBasicDiagnostics (DisparateImportVisualBasicAnalyzer())
 
 [<Fact>]
 let ``BA0002 is reported for System.Data.Linq and System.Drawing`` () =
@@ -84,8 +85,10 @@ let ``BA0002 is reported for System.Data.Linq and System.Drawing in Visual Basic
         """
 
     let diagnostics = getVisualBasicDiagnostics source
-    Assert.Contains(diagnostics, fun d -> d.Id = Rules.DisparateImports.Id)
-    Assert.Contains(diagnostics, fun d -> d.GetMessage().Contains("System.Data.Linq") && d.GetMessage().Contains("System.Drawing"))
+    let ba0002 = diagnostics |> Seq.filter (fun d -> d.Id = Rules.DisparateImports.Id) |> Seq.toArray
+    Assert.Equal(1, ba0002.Length)
+    Assert.Contains("System.Data.Linq", ba0002.[0].GetMessage())
+    Assert.Contains("System.Drawing", ba0002.[0].GetMessage())
 
 [<Fact>]
 let ``BA0002 is not reported for two data-access imports in Visual Basic`` () =

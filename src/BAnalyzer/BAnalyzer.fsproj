@@ -36,9 +36,9 @@
 
   <!--
     NuGet convention for both Visual Studio and VS Code C# Dev Kit:
-    put the analyzer and its FSharp.Core dependency under analyzers/dotnet/cs,
-    not in lib/. The IDE host loads those DLLs as analyzers; they are not
-    referenced by the consuming project at runtime.
+    put the analyzer and its FSharp.Core dependency under analyzers/dotnet/cs and
+    analyzers/dotnet/vb, not in lib/. The IDE host loads those DLLs as analyzers;
+    they are not referenced by the consuming project at runtime.
   -->
   <PropertyGroup>
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);PackAnalyzerAssemblies</TargetsForTfmSpecificContentInPackage>
