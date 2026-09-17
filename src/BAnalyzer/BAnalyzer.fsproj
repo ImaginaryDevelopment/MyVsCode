@@ -54,10 +54,4 @@
       <TargetPathWithTargetPlatformMoniker Include="$(PkgFSharp_Core)\lib\netstandard2.0\FSharp.Core.dll" IncludeRuntimeDependency="false" />
     </ItemGroup>
   </Target>
-
-  <Target Name="CopyFSharpCore" AfterTargets="Build">
-    <Copy SourceFiles="$(PkgFSharp_Core)\lib\netstandard2.0\FSharp.Core.dll"
-          DestinationFolder="$(OutputPath)"
-          SkipUnchangedFiles="true" />
-  </Target>
 </Project>
