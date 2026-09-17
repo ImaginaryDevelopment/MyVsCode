@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <Compile Include="SnapshotTests.fs" />
+    <Compile Include="ProjectSnapshotTests.fs" />
   </ItemGroup>
 
   <ItemGroup>

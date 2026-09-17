@@ -22,3 +22,43 @@ module Model =
             FilePath: string
             Span: TextSpan
         }
+
+    type TfFamily =
+        | NetFramework
+        | Net
+        | NetStandard
+        | NetCoreApp
+        | Other
+
+    type TargetFramework =
+        {
+            Moniker: string
+            Family: TfFamily
+            Version: string
+        }
+
+    type NullableMode =
+        | NullableUnspecified
+        | NullableEnable
+        | NullableDisable
+        | NullableWarnings
+
+    type ImplicitUsingsMode =
+        | ImplicitUsingsUnspecified
+        | ImplicitUsingsEnable
+        | ImplicitUsingsDisable
+
+    type ProjectSnapshot =
+        {
+            FilePath: string
+            Name: string
+            TargetFrameworks: TargetFramework list
+            Nullable: NullableMode
+            ImplicitUsings: ImplicitUsingsMode
+        }
+
+    type SolutionSnapshot =
+        {
+            FilePath: string
+            Projects: ProjectSnapshot list
+        }

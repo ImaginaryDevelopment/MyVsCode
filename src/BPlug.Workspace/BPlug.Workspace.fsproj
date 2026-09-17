@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <Compile Include="Snapshots.fs" />
+    <Compile Include="Projects.fs" />
   </ItemGroup>
 
   <ItemGroup>
