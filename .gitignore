@@ -1,0 +1,15 @@
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+.idea/
+*.nupkg
+*.snupkg
+project.lock.json
+artifacts/
+TestResults/
+*.DotSettings.user
