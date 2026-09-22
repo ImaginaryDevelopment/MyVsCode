@@ -1,6 +1,7 @@
 module BPlug.Rules
 
 open System
+open BReusable
 open BPlug.Model
 
 module Ids =
@@ -16,7 +17,6 @@ let private projectLabel (project: ProjectSnapshot) =
     else
         project.Name
 
-let private join (parts: string seq) = String.Join(", ", parts)
 
 let private finding id message filePath =
     {
@@ -48,7 +48,7 @@ let private targetFrameworkFindings (solution: SolutionSnapshot) =
 
             finding
                 Ids.TargetFrameworkSkew
-                (sprintf "Projects disagree on %s versions: %s" (TargetFrameworks.familyName family) (join detail))
+                (sprintf "Projects disagree on %s versions: %s" (TargetFrameworks.familyName family) (String.join detail))
                 solution.FilePath
             |> Some
     )
@@ -75,7 +75,7 @@ let private settingFindings
         [
             finding
                 id
-                (sprintf "Projects disagree on %s: %s" label (join detail))
+                (sprintf "Projects disagree on %s: %s" label (String.join detail))
                 solution.FilePath
         ]
 

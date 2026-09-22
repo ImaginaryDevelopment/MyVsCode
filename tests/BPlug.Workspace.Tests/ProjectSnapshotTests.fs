@@ -53,7 +53,7 @@ let ``fromPath reports mixed Framework TFMs across projects`` () =
         write dir "New.csproj" (sdkProject "net46" "") |> ignore
 
         let findings =
-            Workspace.Projects.fromPath dir
+            Workspace.Projects.fromProjectFiles "App.sln" [ Path.Combine(dir, "Old.csproj"); Path.Combine(dir, "New.csproj") ]
             |> Rules.analyzeSolution
 
         Assert.Contains(findings, fun f -> f.Id = Rules.Ids.TargetFrameworkSkew)

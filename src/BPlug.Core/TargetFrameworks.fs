@@ -2,6 +2,7 @@ module BPlug.TargetFrameworks
 
 open System
 open BPlug.Model
+open BReusable
 
 let familyName =
     function
@@ -18,7 +19,7 @@ let private dottedNetFramework (digits: string) =
     | _ -> digits
 
 let parse (raw: string) : TargetFramework =
-    let moniker = raw.Trim()
+    let moniker = raw |> String.trim
     let s = moniker.ToLowerInvariant()
 
     let family, version =
@@ -43,7 +44,7 @@ let parse (raw: string) : TargetFramework =
     { Moniker = moniker; Family = family; Version = version }
 
 let parseNullable (raw: string) =
-    match raw.Trim().ToLowerInvariant() with
+    match raw |> String.trim |> String.toLowerInvariant with
     | "enable"
     | "true" -> NullableEnable
     | "disable"
@@ -52,7 +53,7 @@ let parseNullable (raw: string) =
     | _ -> NullableUnspecified
 
 let parseImplicitUsings (raw: string) =
-    match raw.Trim().ToLowerInvariant() with
+    match raw |> String.trim |> String.toLowerInvariant with
     | "enable"
     | "true" -> ImplicitUsingsEnable
     | "disable"

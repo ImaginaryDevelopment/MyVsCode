@@ -3,7 +3,7 @@
   <Metadata>
     <Identity Id="BPlug.VisualStudio" Version="0.1.0" Language="en-US" Publisher="BPlug" />
     <DisplayName>BPlug</DisplayName>
-    <Description>BPlug analysis for Visual Studio. Talks to BPlug.Server; does not embed Roslyn in the VSIX.</Description>
+    <Description>Analyzes loaded .NET projects for mixed target frameworks, Nullable, and ImplicitUsings. Starts BPlug.Server; does not embed Roslyn in the VSIX.</Description>
   </Metadata>
   <Installation>
     <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0,18.0)">

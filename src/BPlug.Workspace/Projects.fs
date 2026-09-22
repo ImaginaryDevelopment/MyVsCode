@@ -159,3 +159,16 @@ let fromPath (path: string) : SolutionSnapshot =
         FilePath = solutionPath
         Projects = projectPaths |> List.map fromProjectFile
     }
+
+let fromProjectFiles (solutionLabel: string) (projectPaths: string list) : SolutionSnapshot =
+    let projects =
+        projectPaths
+        |> List.map Path.GetFullPath
+        |> List.distinct
+        |> List.filter File.Exists
+        |> List.map fromProjectFile
+
+    {
+        FilePath = solutionLabel
+        Projects = projects
+    }

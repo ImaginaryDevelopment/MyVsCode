@@ -21,16 +21,12 @@ On-demand analysis for VS Code and Visual Studio. Editors talk to a server; the 
 VS Code / Visual Studio  →  BPlug.Server  →  BPlug.Workspace (project XML / Roslyn)  →  snapshot  →  BPlug.Core (rules)
 ```
 
-```
-VS Code / Visual Studio  →  BPlug.Server  →  BPlug.Workspace (Roslyn)  →  snapshot  →  BPlug.Core (rules)
-```
-
 | Project | Description |
 |---|---|
 | `src/BPlug.Core` | Shared models and rules. Fable-safe: no Roslyn, no IDE APIs. Referenced by Server, Workspace, and the VS Code Fable project. |
 | `src/BPlug.Workspace` | Reads `.csproj` / `.fsproj` / `.vbproj` (and `Directory.Build.props`) plus Roslyn document snapshots into Core types. The only BPlug project that references `Microsoft.CodeAnalysis`. |
-| `src/BPlug.Server` | Process the extensions start. `BPlug.Server --analyze-solution <path>` runs the project-setting rules. |
+| `src/BPlug.Server` | Process the extensions start. `--analyze-solution <path>` or `--analyze-projects [<sln>] <csproj>...` runs the project-setting rules. |
 | `src/BPlug.VSCode` | Visual Studio Code extension (Fable entry + `package.json`). Starts Server; does not load Roslyn in the extension host. |
-| `src/BPlug.VisualStudio` | Visual Studio 2022 VSIX. Starts Server; shows findings in VS. Does not embed Roslyn in the VSIX. |
+| `src/BPlug.VisualStudio` | Visual Studio 2022 VSIX. **Tools → Analyze Loaded Projects (BPlug)** enumerates open MSBuild projects, runs Server, and writes BP0001–BP0003 to the Error List. Also runs when a solution opens. |
 | `tests/BPlug.Core.Tests` | Tests against Core types and rules with hand-built snapshots. |
 | `tests/BPlug.Workspace.Tests` | Tests that Roslyn parse output becomes Core snapshots. |

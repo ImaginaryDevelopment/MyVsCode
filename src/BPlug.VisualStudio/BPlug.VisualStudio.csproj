@@ -7,6 +7,9 @@
     <VSSDKBuildToolsAutoSetup>true</VSSDKBuildToolsAutoSetup>
     <GeneratePkgDefFile>true</GeneratePkgDefFile>
     <UseCodebase>true</UseCodebase>
+    <CreateVsixContainer>true</CreateVsixContainer>
+    <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
+    <BPlugServerOut>$(MSBuildThisFileDirectory)..\BPlug.Server\bin\$(Configuration)\net8.0\</BPlugServerOut>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,10 +18,33 @@
 
   <ItemGroup>
     <None Include="source.extension.vsixmanifest" />
+    <VSCTCompile Include="BPlugPackage.vsct">
+      <ResourceName>Menus.ctmenu</ResourceName>
+    </VSCTCompile>
   </ItemGroup>
 
   <ItemGroup>
+    <Reference Include="System.Design" />
     <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.12.40392" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="17.12.2069" PrivateAssets="all" />
   </ItemGroup>
+
+  <Target Name="BuildBPlugServer" BeforeTargets="BeforeCompile">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\BPlug.Server\BPlug.Server.fsproj" Targets="Build" Properties="Configuration=$(Configuration)" />
+  </Target>
+
+  <Target Name="CopyBPlugServer" AfterTargets="Build">
+    <ItemGroup>
+      <_BPlugServerFiles Include="$(BPlugServerOut)*.dll;$(BPlugServerOut)*.exe;$(BPlugServerOut)*.json;$(BPlugServerOut)*.pdb" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_BPlugServerFiles)" DestinationFolder="$(OutputPath)Server" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="IncludeBPlugServerInVsix" BeforeTargets="GetVsixSourceItems">
+    <ItemGroup>
+      <VSIXSourceItem Include="$(BPlugServerOut)**\*.*">
+        <VSIXSubPath>Server\%(RecursiveDir)</VSIXSubPath>
+      </VSIXSourceItem>
+    </ItemGroup>
+  </Target>
 </Project>
