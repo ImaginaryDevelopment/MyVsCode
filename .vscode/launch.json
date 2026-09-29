@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "BPlug VS Code Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/src/BPlug.VSCode"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/src/BPlug.VSCode/out/**/*.js"
+      ],
+      "preLaunchTask": "fable-bplug-vscode"
+    }
+  ]
+}

@@ -14,12 +14,16 @@
     "onStartupFinished"
   ],
   "main": "./out/Extension.js",
+  "type": "module",
   "contributes": {
     "commands": [
       {
         "command": "bplug.analyze",
-        "title": "BPlug: Analyze Open Document"
+        "title": "BPlug: Analyze Workspace Projects"
       }
     ]
+  },
+  "dependencies": {
+    "@fable-org/fable-library-js": "^2.8.0"
   }
 }

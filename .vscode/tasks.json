@@ -1,0 +1,35 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "compile-bplug-vscode",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "src/BPlug.VSCode/BPlug.VSCode.fsproj",
+        "-nologo"
+      ],
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "fable-bplug-vscode",
+      "type": "shell",
+      "command": "dotnet",
+      "args": [
+        "tool",
+        "run",
+        "fable",
+        "src/BPlug.VSCode",
+        "-o",
+        "src/BPlug.VSCode/out"
+      ],
+      "dependsOn": "compile-bplug-vscode",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": "$msCompile"
+    }
+  ]
+}

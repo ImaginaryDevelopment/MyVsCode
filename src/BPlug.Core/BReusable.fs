@@ -8,4 +8,10 @@ module BReusable =
             else
                 s.Trim()
 
-        let join (parts: string seq) = String.Join(", ", parts)
+        let toLowerInvariant (s: string) =
+            if isNull s then
+                System.String.Empty
+            else
+                s.ToLowerInvariant()
+
+        let join (parts: string seq) = System.String.Join(", ", parts)

@@ -4,6 +4,7 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <Deterministic>true</Deterministic>
     <IsPackable>false</IsPackable>
+    <BPlugServerOut>$(MSBuildThisFileDirectory)..\BPlug.Server\bin\$(Configuration)\net8.0\</BPlugServerOut>
   </PropertyGroup>
 
   <ItemGroup>
@@ -18,4 +19,15 @@
   <ItemGroup>
     <PackageReference Include="Fable.Core" Version="4.5.0" />
   </ItemGroup>
+
+  <Target Name="BuildBPlugServer" BeforeTargets="BeforeCompile" Condition="'$(DesignTimeBuild)' != 'true' AND '$(FABLE_COMPILER)' != 'true'">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\BPlug.Server\BPlug.Server.fsproj" Targets="Build" Properties="Configuration=$(Configuration)" />
+  </Target>
+
+  <Target Name="CopyBPlugServer" AfterTargets="Build">
+    <ItemGroup>
+      <_BPlugServerFiles Include="$(BPlugServerOut)*.dll;$(BPlugServerOut)*.exe;$(BPlugServerOut)*.json;$(BPlugServerOut)*.pdb" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_BPlugServerFiles)" DestinationFolder="$(MSBuildProjectDirectory)\server" SkipUnchangedFiles="true" />
+  </Target>
 </Project>
