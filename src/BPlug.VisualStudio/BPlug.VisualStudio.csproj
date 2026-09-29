@@ -5,17 +5,19 @@
     <LangVersion>latest</LangVersion>
     <IsPackable>false</IsPackable>
     <VSSDKBuildToolsAutoSetup>true</VSSDKBuildToolsAutoSetup>
-    <VsixDeployOnDebug>true</VsixDeployOnDebug>
     <GeneratePkgDefFile>true</GeneratePkgDefFile>
     <UseCodebase>true</UseCodebase>
     <CreateVsixContainer>true</CreateVsixContainer>
     <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
     <IncludeDebugSymbolsInVSIXContainer>true</IncludeDebugSymbolsInVSIXContainer>
+    <VSSDKTargetPlatformRegRootSuffix>Exp</VSSDKTargetPlatformRegRootSuffix>
     <!-- SDK-style libraries cannot F5 as "Project". VS 2022 uses StartAction / launchSettings to open the Exp hive. -->
     <StartAction>Program</StartAction>
     <StartProgram>$(DevEnvDir)devenv.exe</StartProgram>
     <StartArguments>/rootsuffix Exp</StartArguments>
+    <!-- Legacy VSSDK copy into the Experimental hive. Do not use VsixDeployOnDebug / slnx Deploy on VS 2022: those try to install the project folder into the host IDE. -->
     <DeployExtension Condition="'$(BuildingInsideVisualStudio)' == 'true'">true</DeployExtension>
+    <DeployExtension Condition="'$(BuildingInsideVisualStudio)' != 'true'">false</DeployExtension>
     <BPlugServerOut>$(MSBuildThisFileDirectory)..\BPlug.Server\bin\$(Configuration)\net8.0\</BPlugServerOut>
   </PropertyGroup>
 
@@ -24,7 +26,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="source.extension.vsixmanifest" />
+    <None Update="source.extension.vsixmanifest">
+      <SubType>Designer</SubType>
+    </None>
     <VSCTCompile Include="BPlugPackage.vsct">
       <ResourceName>Menus.ctmenu</ResourceName>
     </VSCTCompile>
