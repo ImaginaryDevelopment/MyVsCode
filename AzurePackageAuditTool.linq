@@ -1,6 +1,4 @@
 <Query Kind="FSharpProgram">
-  <NuGetReference>NuGet.Versioning</NuGetReference>
-  <Namespace>NuGet.Versioning</Namespace>
   <IncludeUncapsulator>false</IncludeUncapsulator>
 </Query>
 
@@ -36,7 +34,6 @@ open System.Text
 open System.Text.Json
 open System.Threading.Tasks
 open LINQPad.Controls
-open NuGet.Versioning
 
 // --- prefs ---------------------------------------------------------------------
 
@@ -1291,6 +1288,142 @@ let downloadVulnerabilityDb () =
 let loadVulnerabilityDbCached () =
     Util.Cache(Func<_>(downloadVulnerabilityDb), key = "nugetVulnerabilityInfoDb")
 
+/// Minimal NuGet SemVer + VersionRange (no NuGet.Versioning package — free LINQPad friendly).
+type NugetVer = {
+    Major: int
+    Minor: int
+    Patch: int
+    Revision: int
+    ReleaseLabels: string[]
+}
+
+type NugetRange = {
+    Min: NugetVer option
+    Max: NugetVer option
+    MinInclusive: bool
+    MaxInclusive: bool
+}
+
+let tryParseNugetVersion (text: string) : NugetVer option =
+    if String.IsNullOrWhiteSpace text then None
+    else
+        let raw =
+            let t = text.Trim()
+            let plus = t.IndexOf('+')
+            if plus < 0 then t else t.Substring(0, plus)
+        if String.IsNullOrWhiteSpace raw || raw.IndexOf('*') >= 0 then None
+        else
+            let numericPart, labels =
+                let dash = raw.IndexOf('-')
+                if dash < 0 then raw, Array.empty
+                else
+                    let labelText = raw.Substring(dash + 1)
+                    if String.IsNullOrWhiteSpace labelText then raw.Substring(0, dash), Array.empty
+                    else
+                        raw.Substring(0, dash),
+                        labelText.Split([|'.'|], StringSplitOptions.RemoveEmptyEntries)
+            let parts = numericPart.Split('.')
+            if parts.Length < 1 || parts.Length > 4 then None
+            else
+                let mutable ok = true
+                let nums = Array.zeroCreate 4
+                for i = 0 to parts.Length - 1 do
+                    match Int32.TryParse(parts.[i]) with
+                    | true, n when n >= 0 -> nums.[i] <- n
+                    | _ -> ok <- false
+                if not ok then None
+                else
+                    Some {
+                        Major = nums.[0]
+                        Minor = nums.[1]
+                        Patch = nums.[2]
+                        Revision = nums.[3]
+                        ReleaseLabels = labels
+                    }
+
+let compareNugetVersion (a: NugetVer) (b: NugetVer) =
+    let cmp i j = if i < j then -1 elif i > j then 1 else 0
+    let c =
+        match cmp a.Major b.Major with
+        | 0 ->
+            match cmp a.Minor b.Minor with
+            | 0 ->
+                match cmp a.Patch b.Patch with
+                | 0 -> cmp a.Revision b.Revision
+                | x -> x
+            | x -> x
+        | x -> x
+    if c <> 0 then c
+    else
+        let aPre = a.ReleaseLabels.Length > 0
+        let bPre = b.ReleaseLabels.Length > 0
+        if aPre = bPre then
+            if not aPre then 0
+            else
+                let len = min a.ReleaseLabels.Length b.ReleaseLabels.Length
+                let mutable i = 0
+                let mutable result = 0
+                while i < len && result = 0 do
+                    let la = a.ReleaseLabels.[i]
+                    let lb = b.ReleaseLabels.[i]
+                    match Int32.TryParse la, Int32.TryParse lb with
+                    | (true, na), (true, nb) -> result <- cmp na nb
+                    | (true, _), (false, _) -> result <- -1
+                    | (false, _), (true, _) -> result <- 1
+                    | _ -> result <- StringComparer.OrdinalIgnoreCase.Compare(la, lb)
+                    i <- i + 1
+                if result <> 0 then result
+                else cmp a.ReleaseLabels.Length b.ReleaseLabels.Length
+        elif aPre then -1
+        else 1
+
+let tryParseNugetRange (text: string) : NugetRange option =
+    if String.IsNullOrWhiteSpace text then None
+    else
+        let value = text.Trim()
+        let first = value.[0]
+        let last = value.[value.Length - 1]
+        let isBrace = (first = '[' || first = '(') && (last = ']' || last = ')')
+        if not isBrace then
+            match tryParseNugetVersion value with
+            | None -> None
+            | Some minV ->
+                Some { Min = Some minV; Max = None; MinInclusive = true; MaxInclusive = false }
+        else
+            let minIncl = first = '['
+            let maxIncl = last = ']'
+            let inner = value.Substring(1, value.Length - 2).Trim()
+            let parts = inner.Split([|','|], 2)
+            if parts.Length > 2 then None
+            elif parts |> Array.forall String.IsNullOrWhiteSpace then None
+            else
+                let minText = parts.[0].Trim()
+                let maxText =
+                    if parts.Length = 2 then parts.[1].Trim()
+                    else parts.[0].Trim()
+                let parseBound s =
+                    if String.IsNullOrWhiteSpace s then Some None
+                    else tryParseNugetVersion s |> Option.map Some
+                match parseBound minText, parseBound maxText with
+                | Some minV, Some maxV ->
+                    Some { Min = minV; Max = maxV; MinInclusive = minIncl; MaxInclusive = maxIncl }
+                | _ -> None
+
+let nugetRangeSatisfies (range: NugetRange) (ver: NugetVer) =
+    let aboveMin =
+        match range.Min with
+        | None -> true
+        | Some minV ->
+            let c = compareNugetVersion minV ver
+            if range.MinInclusive then c <= 0 else c < 0
+    let belowMax =
+        match range.Max with
+        | None -> true
+        | Some maxV ->
+            let c = compareNugetVersion maxV ver
+            if range.MaxInclusive then c >= 0 else c > 0
+    aboveMin && belowMax
+
 let versionSatisfiesRange (versionText: string) (rangeText: string) =
     let verCore =
         let i = versionText.IndexOf(',')
@@ -1298,13 +1431,9 @@ let versionSatisfiesRange (versionText: string) (rangeText: string) =
         core.ToLowerInvariant()
     if String.IsNullOrWhiteSpace verCore || String.IsNullOrWhiteSpace rangeText then false
     else
-        let mutable nv = Unchecked.defaultof<NuGetVersion>
-        if not (NuGetVersion.TryParse(verCore, &nv)) then false
-        else
-            try
-                let range = VersionRange.Parse rangeText
-                range.Satisfies nv
-            with _ -> false
+        match tryParseNugetVersion verCore, tryParseNugetRange (rangeText.Trim()) with
+        | Some nv, Some range -> nugetRangeSatisfies range nv
+        | _ -> false
 
 let matchNugetVulns (db: Map<string, NugetVulnEntry list>) (packageId: string) (versionText: string) =
     match db |> Map.tryFind (packageKey packageId) with
