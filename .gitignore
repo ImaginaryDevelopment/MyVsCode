@@ -13,4 +13,5 @@ project.lock.json
 artifacts/
 TestResults/
 *.DotSettings.user
+node_modules/
 src/BPlug.VSCode/server/
