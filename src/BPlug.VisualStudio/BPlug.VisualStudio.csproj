@@ -5,10 +5,17 @@
     <LangVersion>latest</LangVersion>
     <IsPackable>false</IsPackable>
     <VSSDKBuildToolsAutoSetup>true</VSSDKBuildToolsAutoSetup>
+    <VsixDeployOnDebug>true</VsixDeployOnDebug>
     <GeneratePkgDefFile>true</GeneratePkgDefFile>
     <UseCodebase>true</UseCodebase>
     <CreateVsixContainer>true</CreateVsixContainer>
     <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
+    <IncludeDebugSymbolsInVSIXContainer>true</IncludeDebugSymbolsInVSIXContainer>
+    <!-- SDK-style libraries cannot F5 as "Project". VS 2022 uses StartAction / launchSettings to open the Exp hive. -->
+    <StartAction>Program</StartAction>
+    <StartProgram>$(DevEnvDir)devenv.exe</StartProgram>
+    <StartArguments>/rootsuffix Exp</StartArguments>
+    <DeployExtension Condition="'$(BuildingInsideVisualStudio)' == 'true'">true</DeployExtension>
     <BPlugServerOut>$(MSBuildThisFileDirectory)..\BPlug.Server\bin\$(Configuration)\net8.0\</BPlugServerOut>
   </PropertyGroup>
 
