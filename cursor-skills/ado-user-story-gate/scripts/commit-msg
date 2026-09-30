@@ -1,0 +1,67 @@
+#!/bin/sh
+# Azure DevOps user-story commit-msg hook
+# Requires somewhere in the message: #<work-item-id> and a category keyword
+# (Feature, TechnicalDebt, Documentation, or Security). Order and position do not matter.
+
+MSG_FILE="$1"
+
+if [ ! -f "$MSG_FILE" ]; then
+  echo "commit-msg: missing commit message file" >&2
+  exit 1
+fi
+
+# Message body for validation: drop blank lines and git template comments.
+# Keep "#12345 ..." work-item lines; skip "# " / "#Please..." template comments.
+BODY=$(
+  grep -E -v '^[[:space:]]*$' "$MSG_FILE" \
+    | grep -E -v '^#([^0-9]|$)'
+)
+
+if [ -z "$BODY" ]; then
+  echo "commit-msg: empty commit message" >&2
+  exit 1
+fi
+
+# First non-empty content line — used only for Merge/Revert exemption.
+SUBJECT=$(printf '%s\n' "$BODY" | head -n 1)
+
+case "$SUBJECT" in
+  Merge\ *|Revert\ *)
+    exit 0
+    ;;
+esac
+
+# #<digits> anywhere in the message
+if ! printf '%s\n' "$BODY" | grep -Eq '#[0-9]+'; then
+  cat >&2 <<'EOF'
+commit-msg: rejected — Azure DevOps user story ID required.
+
+Include a work item reference somewhere in the commit message:
+  #<ID>
+
+Example:
+  #12345 Feature Implement shift swap validation
+
+EOF
+  exit 1
+fi
+
+# Category keyword anywhere in the message (word-ish boundary)
+if ! printf '%s\n' "$BODY" | grep -Eq '(^|[^[:alnum:]])(Feature|TechnicalDebt|Documentation|Security)([^[:alnum:]]|$)'; then
+  cat >&2 <<'EOF'
+commit-msg: rejected — Azure DevOps user story category required.
+
+Include one of these keywords somewhere in the commit message:
+  Feature | TechnicalDebt | Documentation | Security
+
+Examples:
+  #12345 Feature Implement shift swap validation
+  Fix login race — TechnicalDebt #12345
+  Documentation: update runbook (#12345)
+  #12345 Security Rotate service credentials
+
+EOF
+  exit 1
+fi
+
+exit 0
