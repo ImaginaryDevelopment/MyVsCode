@@ -15,11 +15,13 @@
 //   azurePackageAuditFocusRepo     — "all" or org/project/repo@branch (last focus pick)
 //   azurePackageAuditParallelism   — concurrent ADO/OSV work (default 14)
 //
-// Secret: Util.GetPassword("adoPat") — Code (Read) across orgs in adoTargetsJson
+// Secret: Util.GetPassword("adoPat") — Code (Read); spiders projects/repos (orgs via profile when allowed, else prompt)
 //
 // Flow:
-//   1) Manage org/project targets
+//   0) Resolve org(s) (profile accounts if PAT allows, else prompt) → spider projects → repos
+//   1) Manage org/project targets (suggestions from catalog)
 //   2) Discover repos → DumpContainer with Included vs Available + Status; include/exclude/save
+//      (v = dump Available expanded — avoids OnDemand expand race with ReadLine)
 //   2b) Optional focus on one included repo (or all)
 //   3) Scan focused repos for package-lock.json / packages.lock.json; edit audit set
 //   4) Download lockfiles; CVE-check (OSV for npm, nuget.org VulnerabilityInfo for NuGet)
@@ -52,6 +54,9 @@ let PrefParallelism = "azurePackageAuditParallelism"
 [<Literal>]
 let PrefPat = "adoPat"
 
+[<Literal>]
+let PrefSpiderOrgs = "azurePackageAuditSpiderOrgs"
+
 let defaultIfNone =
     function
     | None -> String.Empty
@@ -70,6 +75,10 @@ let createUserPref<'t> key (fRead: string -> 't) (fWrite: 't -> string) =
 
 let promptLine (title: string) (seed: string) =
     let entered = Util.ReadLine(title, seed)
+    if isNull entered then String.Empty else entered.Trim()
+
+let promptLineWithSuggestions (title: string) (seed: string) (suggestions: string seq) =
+    let entered = Util.ReadLine(title, seed, suggestions)
     if isNull entered then String.Empty else entered.Trim()
 
 let jsonOpts =
@@ -107,58 +116,11 @@ let saveTargets (targets: AdoTarget list) =
 
 let targetKey (t: AdoTarget) = sprintf "%s / %s" t.Org t.Project
 
-let manageTargets () =
-    let mutable targets = loadTargets ()
-    targets
-    |> List.mapi (fun i t -> {| Index = i + 1; Org = t.Org; Project = t.Project |})
-    |> fun rows -> rows.Dump(sprintf "stored %s (%d)" PrefTargetsJson rows.Length)
-
-    let rec loop () =
-        let cmd =
-            promptLine "Targets: [Enter]=continue, a=add, d=delete by index, c=clear all" ""
-            |> fun s -> s.ToLowerInvariant()
-        match cmd with
-        | "" | "q" | "done" | "continue" -> targets
-        | "c" | "clear" ->
-            targets <- saveTargets []
-            [].Dump("targets cleared")
-            loop ()
-        | "a" | "add" ->
-            let org = promptLine "Organization name" ""
-            let project = promptLine "Project name" ""
-            if String.IsNullOrWhiteSpace org || String.IsNullOrWhiteSpace project then
-                "add cancelled (org and project required)".Dump()
-            else
-                targets <- saveTargets ({ Org = org; Project = project } :: targets)
-                targets
-                |> List.mapi (fun i t -> {| Index = i + 1; Org = t.Org; Project = t.Project |})
-                |> fun rows -> rows.Dump(sprintf "stored targets now (%d)" rows.Length)
-            loop ()
-        | "d" | "delete" | "del" ->
-            let idxText = promptLine "Index to delete (from table)" ""
-            match Int32.TryParse idxText with
-            | true, n when n >= 1 && n <= targets.Length ->
-                let removed = targets.[n - 1]
-                targets <-
-                    saveTargets (
-                        targets
-                        |> List.indexed
-                        |> List.filter (fun (i, _) -> i <> n - 1)
-                        |> List.map snd)
-                sprintf "removed %s" (targetKey removed) |> fun s -> s.Dump()
-                targets
-                |> List.mapi (fun i t -> {| Index = i + 1; Org = t.Org; Project = t.Project |})
-                |> fun rows -> rows.Dump(sprintf "stored targets now (%d)" rows.Length)
-            | _ -> "invalid index".Dump()
-            loop ()
-        | _ ->
-            "unknown command — use Enter / a / d / c".Dump()
-            loop ()
-
-    let final = loop ()
-    if final.IsEmpty then
-        invalidOp (sprintf "No targets in %s. Use 'a' to add org+project pairs." PrefTargetsJson)
-    final
+let distinctSorted (xs: string list) =
+    xs
+    |> List.filter (fun s -> not (String.IsNullOrWhiteSpace s))
+    |> List.distinctBy (fun s -> s.ToLowerInvariant())
+    |> List.sortBy (fun s -> s.ToLowerInvariant())
 
 // --- audit repo / lockfile prefs -----------------------------------------------
 
@@ -234,8 +196,6 @@ let pat =
         invalidOp (sprintf "Set Util password key '%s' (Code Read)." PrefPat)
     p.Trim()
 
-let targets = manageTargets ()
-
 let parallelism =
     let get, save = createUserPref PrefParallelism int string
     let seed = get () |> Option.defaultValue 14
@@ -248,19 +208,6 @@ let parallelism =
     | _ ->
         save (Some 14)
         14
-
-{|
-    TargetCount = targets.Length
-    Parallelism = parallelism
-    PrefKeys =
-        [|
-            PrefTargetsJson
-            PrefReposJson
-            PrefLockfilesJson
-            PrefParallelism
-            "azurePackageAuditFocusRepo"
-        |]
-|}.Dump("AzurePackageAuditTool")
 
 let makeClient () =
     let handler = new HttpClientHandler(AutomaticDecompression = DecompressionMethods.All)
@@ -311,7 +258,94 @@ let runParallel (degree: int) (items: 'a list) (work: 'a -> 'b) : 'b list =
             |> Async.RunSynchronously
             |> Array.toList)
 
-// --- discover repos ------------------------------------------------------------
+// --- PAT access catalog (orgs → projects → repos) ------------------------------
+
+type AdoAccessCatalog = {
+    Orgs: string list
+    Projects: AdoTarget list
+    Repos: AuditRepo list
+    OrgSource: string
+    Errors: string list
+}
+
+let listOrganizations (client: HttpClient) : Result<string list, string> =
+    try
+        use profileDoc =
+            readJson client HttpMethod.Get "https://app.vssps.visualstudio.com/_apis/profile/profiles/me?api-version=7.1" None
+        let memberId = propStr profileDoc.RootElement "id"
+        if String.IsNullOrWhiteSpace memberId then
+            Error "profile/me returned no id"
+        else
+            let url =
+                sprintf
+                    "https://app.vssps.visualstudio.com/_apis/accounts?memberId=%s&api-version=7.1"
+                    (Uri.EscapeDataString memberId)
+            use accountsDoc = readJson client HttpMethod.Get url None
+            let orgs =
+                propArr accountsDoc.RootElement "value"
+                |> List.choose (fun a ->
+                    let name = propStr a "accountName"
+                    if isNull name then None else Some name)
+                |> distinctSorted
+            Ok orgs
+    with ex ->
+        let msg = ex.Message
+        if
+            msg.IndexOf("Unauthorized", StringComparison.OrdinalIgnoreCase) >= 0
+            || msg.IndexOf("401", StringComparison.OrdinalIgnoreCase) >= 0
+        then
+            Error "profile"
+        else
+            Error msg
+
+let parseOrgList (text: string) =
+    if String.IsNullOrWhiteSpace text then []
+    else
+        text.Split([| ','; ';'; '\n'; '\r' |], StringSplitOptions.RemoveEmptyEntries)
+        |> Array.map (fun s -> s.Trim())
+        |> Array.toList
+        |> distinctSorted
+
+let loadSpiderOrgsPref () =
+    let raw = Util.LoadString PrefSpiderOrgs
+    parseOrgList (if isNull raw then "" else raw)
+
+let saveSpiderOrgsPref (orgs: string list) =
+    let cleaned = distinctSorted orgs
+    Util.SaveString(
+        PrefSpiderOrgs,
+        if cleaned.IsEmpty then null else String.Join(", ", cleaned))
+    cleaned
+
+let promptOrgsToSpider (seedOrgs: string list) =
+    let suggestions = distinctSorted (seedOrgs @ loadSpiderOrgsPref ())
+    let seedText = String.Join(", ", suggestions)
+    let entered =
+        if suggestions.IsEmpty then
+            promptLine
+                "ADO organization name(s) to spider for projects/repos (comma-separated)"
+                ""
+        else
+            promptLineWithSuggestions
+                "ADO organization name(s) to spider (comma-separated; Enter keeps suggestions)"
+                seedText
+                suggestions
+    let chosen =
+        let parsed = parseOrgList entered
+        if parsed.IsEmpty then suggestions else parsed
+    if chosen.IsEmpty then
+        invalidOp "At least one organization name is required to spider projects/repos."
+    saveSpiderOrgsPref chosen
+
+let listProjectsForOrg (client: HttpClient) (org: string) : AdoTarget list =
+    let url =
+        sprintf "https://dev.azure.com/%s/_apis/projects?api-version=7.1&$top=1000" (Uri.EscapeDataString org)
+    use doc = readJson client HttpMethod.Get url None
+    propArr doc.RootElement "value"
+    |> List.choose (fun p ->
+        let name = propStr p "name"
+        if isNull name then None
+        else Some { Org = org; Project = name })
 
 let listReposForTarget (client: HttpClient) (t: AdoTarget) : AuditRepo list =
     let url = sprintf "%s/_apis/git/repositories?api-version=7.1" (baseUrl t.Org t.Project)
@@ -332,6 +366,165 @@ let listReposForTarget (client: HttpClient) (t: AdoTarget) : AuditRepo list =
                     Branch = branch
                 })
 
+let spiderAccessCatalog (client: HttpClient) (seedTargets: AdoTarget list) : AdoAccessCatalog =
+    let mutable errors: string list = []
+    let seedOrgs =
+        distinctSorted (
+            (seedTargets |> List.map (fun t -> t.Org))
+            @ loadSpiderOrgsPref ())
+    let orgs, orgSource =
+        match listOrganizations client with
+        | Ok xs when not xs.IsEmpty ->
+            saveSpiderOrgsPref xs |> ignore
+            xs, sprintf "ADO profile (%d)" xs.Length
+        | Ok _ ->
+            let chosen = promptOrgsToSpider seedOrgs
+            chosen, sprintf "prompted (profile returned none) — %s" (String.Join(", ", chosen))
+        | Error _ ->
+            // Profile list often 401 for org-scoped PATs; project/repo APIs still work after org name.
+            let chosen = promptOrgsToSpider seedOrgs
+            chosen, sprintf "prompted (profile list unavailable) — %s" (String.Join(", ", chosen))
+
+    sprintf "spidering projects/repos for: %s" (String.Join(", ", orgs))
+    |> fun s -> s.Dump("access discovery")
+
+    let projectResults =
+        runParallel parallelism orgs (fun org ->
+            try Ok(listProjectsForOrg client org)
+            with ex -> Error(sprintf "%s projects: %s" org ex.Message))
+    errors <-
+        (projectResults |> List.choose (function Error e -> Some e | _ -> None))
+        @ errors
+    let projects =
+        projectResults
+        |> List.choose (function Ok xs -> Some xs | _ -> None)
+        |> List.concat
+        |> List.distinctBy (fun t -> t.Org.ToLowerInvariant(), t.Project.ToLowerInvariant())
+        |> List.sortBy (fun t -> t.Org.ToLowerInvariant(), t.Project.ToLowerInvariant())
+
+    let projectsForRepos =
+        if projects.IsEmpty then seedTargets
+        else projects
+
+    let repoResults =
+        runParallel parallelism projectsForRepos (fun t ->
+            try Ok(listReposForTarget client t)
+            with ex -> Error(sprintf "%s repos: %s" (targetKey t) ex.Message))
+    errors <-
+        (repoResults |> List.choose (function Error e -> Some e | _ -> None))
+        @ errors
+    let repos =
+        repoResults
+        |> List.choose (function Ok xs -> Some xs | _ -> None)
+        |> List.concat
+        |> List.distinctBy (fun r ->
+            r.Org.ToLowerInvariant(), r.Project.ToLowerInvariant(), r.Repo.ToLowerInvariant())
+        |> List.sortBy (fun r ->
+            r.Org.ToLowerInvariant(), r.Project.ToLowerInvariant(), r.Repo.ToLowerInvariant())
+
+    {
+        Orgs = orgs
+        Projects = projects
+        Repos = repos
+        OrgSource = orgSource
+        Errors = errors |> List.rev
+    }
+
+let manageTargets (catalog: AdoAccessCatalog) =
+    let mutable targets = loadTargets ()
+    {|
+        OrgSource = catalog.OrgSource
+        Orgs = catalog.Orgs
+        CatalogProjects = catalog.Projects.Length
+        CatalogRepos = catalog.Repos.Length
+        StoredTargets = targets.Length
+    |}.Dump("access catalog")
+    if not catalog.Errors.IsEmpty then
+        catalog.Errors.Dump("access catalog errors")
+    targets
+    |> List.mapi (fun i t -> {| Index = i + 1; Org = t.Org; Project = t.Project |})
+    |> fun rows -> rows.Dump(sprintf "stored %s (%d)" PrefTargetsJson rows.Length)
+
+    let dumpTargets heading =
+        targets
+        |> List.mapi (fun i t -> {| Index = i + 1; Org = t.Org; Project = t.Project |})
+        |> fun rows -> rows.Dump(sprintf "%s (%d)" heading rows.Length)
+
+    let orgSuggestions () =
+        distinctSorted (catalog.Orgs @ (targets |> List.map (fun t -> t.Org)))
+
+    let projectSuggestions org =
+        let fromCatalog =
+            catalog.Projects
+            |> List.filter (fun t ->
+                String.IsNullOrWhiteSpace org
+                || String.Equals(t.Org, org, StringComparison.OrdinalIgnoreCase))
+            |> List.map (fun t -> t.Project)
+        let fromStored =
+            targets
+            |> List.filter (fun t ->
+                String.IsNullOrWhiteSpace org
+                || String.Equals(t.Org, org, StringComparison.OrdinalIgnoreCase))
+            |> List.map (fun t -> t.Project)
+        distinctSorted (fromCatalog @ fromStored)
+
+    let rec loop () =
+        let cmd =
+            promptLine "Targets: [Enter]=continue, a=add, d=delete by index, c=clear all" ""
+            |> fun s -> s.ToLowerInvariant()
+        match cmd with
+        | "" | "q" | "done" | "continue" -> targets
+        | "c" | "clear" ->
+            targets <- saveTargets []
+            [].Dump("targets cleared")
+            loop ()
+        | "a" | "add" ->
+            let orgs = orgSuggestions ()
+            let orgSeed = orgs |> List.tryHead |> Option.defaultValue ""
+            let org =
+                if orgs.IsEmpty then promptLine "Organization name" orgSeed
+                else promptLineWithSuggestions "Organization (start typing for autocomplete)" orgSeed orgs
+            let projects = projectSuggestions org
+            let projectSeed = projects |> List.tryHead |> Option.defaultValue ""
+            let project =
+                if projects.IsEmpty then promptLine "Project name" projectSeed
+                else
+                    promptLineWithSuggestions
+                        "Project (start typing for autocomplete)"
+                        projectSeed
+                        projects
+            if String.IsNullOrWhiteSpace org || String.IsNullOrWhiteSpace project then
+                "add cancelled (org and project required)".Dump()
+            else
+                targets <- saveTargets ({ Org = org; Project = project } :: targets)
+                dumpTargets "stored targets now"
+            loop ()
+        | "d" | "delete" | "del" ->
+            let idxText = promptLine "Index to delete (from table)" ""
+            match Int32.TryParse idxText with
+            | true, n when n >= 1 && n <= targets.Length ->
+                let removed = targets.[n - 1]
+                targets <-
+                    saveTargets (
+                        targets
+                        |> List.indexed
+                        |> List.filter (fun (i, _) -> i <> n - 1)
+                        |> List.map snd)
+                sprintf "removed %s" (targetKey removed) |> fun s -> s.Dump()
+                dumpTargets "stored targets now"
+            | _ -> "invalid index".Dump()
+            loop ()
+        | _ ->
+            "unknown command — use Enter / a / d / c".Dump()
+            loop ()
+
+    let final = loop ()
+    if final.IsEmpty then
+        invalidOp (sprintf "No targets in %s. Use 'a' to add org+project pairs." PrefTargetsJson)
+    final
+
+// --- discover repos ------------------------------------------------------------
+
 let listBranchesForRepo (client: HttpClient) (r: AuditRepo) : string list =
     let url =
         sprintf
@@ -346,10 +539,6 @@ let listBranchesForRepo (client: HttpClient) (r: AuditRepo) : string list =
         else Some(normalizeBranch name))
     |> List.distinct
     |> List.sortBy (fun b -> b.ToLowerInvariant())
-
-let promptLineWithSuggestions (title: string) (seed: string) (suggestions: string seq) =
-    let entered = Util.ReadLine(title, seed, suggestions)
-    if isNull entered then String.Empty else entered.Trim()
 
 let discoverRepos (client: HttpClient) (ts: AdoTarget list) =
     let results =
@@ -393,7 +582,7 @@ let repoRows (repos: AuditRepo list) =
             Branch = r.Branch
         |})
 
-let manageRepos (client: HttpClient) (ts: AdoTarget list) =
+let manageRepos (client: HttpClient) (ts: AdoTarget list) (catalog: AdoAccessCatalog) =
     let mutable included = loadJsonList<AuditRepo> PrefReposJson |> sortRepos
     let mutable discovered: AuditRepo list = []
     let mutable available: AuditRepo list = []
@@ -409,7 +598,7 @@ let manageRepos (client: HttpClient) (ts: AdoTarget list) =
                 Included = repoRows included
                 Available =
                     Util.OnDemand(
-                        sprintf "%d available — expand to include" available.Length,
+                        sprintf "%d available — expand or use v=dump expanded" available.Length,
                         Func<obj>(fun () -> repoRows available :> obj))
             |}
 
@@ -440,14 +629,23 @@ let manageRepos (client: HttpClient) (ts: AdoTarget list) =
         included <- saveJsonList PrefReposJson (sortRepos included) |> sortRepos
         available <- availableFrom discovered included
 
+    let dumpAvailableExpanded () =
+        let rows = repoRows available
+        rows.Dump(sprintf "available repos expanded (%d) — use i=<index> to include" rows.Length)
+        status <- sprintf "dumped %d available repo(s) expanded" available.Length
+        refreshView ()
+
     let rec loop () =
         let cmd =
             promptLine
-                "Repos: [Enter]=continue, i=include#, x=exclude#, cb=change branch (included#), a=add, r=rediscover, c=clear"
+                "Repos: [Enter]=continue, v=dump available, i=include#, x=exclude#, cb=change branch (included#), a=add, r=rediscover, c=clear"
                 ""
             |> fun s -> s.ToLowerInvariant()
         match cmd with
         | "" | "q" | "done" | "continue" -> included
+        | "v" | "view" | "available" | "avail" ->
+            dumpAvailableExpanded ()
+            loop ()
         | "c" | "clear" ->
             let n = included.Length
             included <- []
@@ -565,14 +763,13 @@ let manageRepos (client: HttpClient) (ts: AdoTarget list) =
         | "a" | "add" ->
             let known =
                 (ts |> List.map (fun t -> t.Org, t.Project))
+                @ (catalog.Projects |> List.map (fun t -> t.Org, t.Project))
                 @ (discovered |> List.map (fun r -> r.Org, r.Project))
                 @ (included |> List.map (fun r -> r.Org, r.Project))
             let orgSuggestions =
-                known
-                |> List.map fst
-                |> List.filter (fun s -> not (String.IsNullOrWhiteSpace s))
-                |> List.distinctBy (fun s -> s.ToLowerInvariant())
-                |> List.sortBy (fun s -> s.ToLowerInvariant())
+                distinctSorted (
+                    catalog.Orgs
+                    @ (known |> List.map fst))
             let orgSeed =
                 ts
                 |> List.tryHead
@@ -582,14 +779,12 @@ let manageRepos (client: HttpClient) (ts: AdoTarget list) =
                 if orgSuggestions.IsEmpty then promptLine "Organization" orgSeed
                 else promptLineWithSuggestions "Organization (start typing for autocomplete)" orgSeed orgSuggestions
             let projectSuggestions =
-                known
-                |> List.filter (fun (o, _) ->
-                    String.IsNullOrWhiteSpace org
-                    || String.Equals(o, org, StringComparison.OrdinalIgnoreCase))
-                |> List.map snd
-                |> List.filter (fun s -> not (String.IsNullOrWhiteSpace s))
-                |> List.distinctBy (fun s -> s.ToLowerInvariant())
-                |> List.sortBy (fun s -> s.ToLowerInvariant())
+                distinctSorted (
+                    known
+                    |> List.filter (fun (o, _) ->
+                        String.IsNullOrWhiteSpace org
+                        || String.Equals(o, org, StringComparison.OrdinalIgnoreCase))
+                    |> List.map snd)
             let projectSeed =
                 known
                 |> List.tryFind (fun (o, _) -> String.Equals(o, org, StringComparison.OrdinalIgnoreCase))
@@ -607,6 +802,12 @@ let manageRepos (client: HttpClient) (ts: AdoTarget list) =
                         projectSeed
                         projectSuggestions
             let repoSuggestions =
+                let fromCatalog =
+                    catalog.Repos
+                    |> List.filter (fun r ->
+                        String.Equals(r.Org, org, StringComparison.OrdinalIgnoreCase)
+                        && String.Equals(r.Project, project, StringComparison.OrdinalIgnoreCase))
+                    |> List.map (fun r -> r.Repo)
                 let fromKnown =
                     discovered @ included
                     |> List.filter (fun r ->
@@ -615,6 +816,7 @@ let manageRepos (client: HttpClient) (ts: AdoTarget list) =
                     |> List.map (fun r -> r.Repo)
                 let fromAdo =
                     if String.IsNullOrWhiteSpace org || String.IsNullOrWhiteSpace project then []
+                    elif not fromCatalog.IsEmpty then []
                     else
                         status <- sprintf "loading repos for %s / %s…" org project
                         refreshView ()
@@ -622,10 +824,7 @@ let manageRepos (client: HttpClient) (ts: AdoTarget list) =
                             listReposForTarget client { Org = org; Project = project }
                             |> List.map (fun r -> r.Repo)
                         with _ -> []
-                fromKnown @ fromAdo
-                |> List.filter (fun s -> not (String.IsNullOrWhiteSpace s))
-                |> List.distinctBy (fun s -> s.ToLowerInvariant())
-                |> List.sortBy (fun s -> s.ToLowerInvariant())
+                distinctSorted (fromCatalog @ fromKnown @ fromAdo)
             let repo =
                 if repoSuggestions.IsEmpty then promptLine "Repo name" ""
                 else promptLineWithSuggestions "Repo name (start typing for autocomplete)" "" repoSuggestions
@@ -635,13 +834,20 @@ let manageRepos (client: HttpClient) (ts: AdoTarget list) =
                 refreshView ()
             else
                 let repoId =
-                    try
-                        listReposForTarget client { Org = org; Project = project }
-                        |> List.tryFind (fun r ->
-                            String.Equals(r.Repo, repo, StringComparison.OrdinalIgnoreCase))
-                        |> Option.map (fun r -> r.RepoId)
-                        |> Option.defaultValue ""
-                    with _ -> ""
+                    catalog.Repos @ discovered
+                    |> List.tryFind (fun r ->
+                        String.Equals(r.Org, org, StringComparison.OrdinalIgnoreCase)
+                        && String.Equals(r.Project, project, StringComparison.OrdinalIgnoreCase)
+                        && String.Equals(r.Repo, repo, StringComparison.OrdinalIgnoreCase))
+                    |> Option.map (fun r -> r.RepoId)
+                    |> Option.defaultValue (
+                        try
+                            listReposForTarget client { Org = org; Project = project }
+                            |> List.tryFind (fun r ->
+                                String.Equals(r.Repo, repo, StringComparison.OrdinalIgnoreCase))
+                            |> Option.map (fun r -> r.RepoId)
+                            |> Option.defaultValue ""
+                        with _ -> "")
                 let added =
                     {
                         Org = org
@@ -663,7 +869,7 @@ let manageRepos (client: HttpClient) (ts: AdoTarget list) =
                 refreshView ()
             loop ()
         | _ ->
-            status <- "unknown command — use Enter / i / x / cb / a / r / c"
+            status <- "unknown command — use Enter / v / i / x / cb / a / r / c"
             refreshView ()
             loop ()
 
@@ -1753,7 +1959,28 @@ let toDumpRow (f: Finding) =
 
 use client = makeClient ()
 
-let allIncludedRepos = manageRepos client targets
+"resolving org(s), then spidering projects → repos via PAT…".Dump("access discovery")
+let accessCatalog = spiderAccessCatalog client (loadTargets ())
+let targets = manageTargets accessCatalog
+
+{|
+    TargetCount = targets.Length
+    Parallelism = parallelism
+    CatalogOrgs = accessCatalog.Orgs.Length
+    CatalogProjects = accessCatalog.Projects.Length
+    CatalogRepos = accessCatalog.Repos.Length
+    PrefKeys =
+        [|
+            PrefTargetsJson
+            PrefReposJson
+            PrefLockfilesJson
+            PrefParallelism
+            PrefSpiderOrgs
+            "azurePackageAuditFocusRepo"
+        |]
+|}.Dump("AzurePackageAuditTool")
+
+let allIncludedRepos = manageRepos client targets accessCatalog
 
 let pickFocusedRepos (repos: AuditRepo list) =
     if repos.Length <= 1 then
