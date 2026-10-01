@@ -20,8 +20,7 @@
 // Flow:
 //   0) Resolve org(s) (profile accounts if PAT allows, else prompt) → spider projects → repos
 //   1) Manage org/project targets (suggestions from catalog)
-//   2) Discover repos → DumpContainer with Included vs Available + Status; include/exclude/save
-//      (v = dump Available expanded — avoids OnDemand expand race with ReadLine)
+//   2) Discover repos → DumpContainer with Included + Status; v dumps Available; include/exclude/save
 //   2b) Optional focus on one included repo (or all)
 //   3) Scan focused repos for package-lock.json / packages.lock.json; edit audit set
 //   4) Download lockfiles; CVE-check (OSV for npm, nuget.org VulnerabilityInfo for NuGet)
@@ -595,11 +594,8 @@ let manageRepos (client: HttpClient) (ts: AdoTarget list) (catalog: AdoAccessCat
         container.Content <-
             {|
                 Status = status
+                AvailableCount = available.Length
                 Included = repoRows included
-                Available =
-                    Util.OnDemand(
-                        sprintf "%d available — expand or use v=dump expanded" available.Length,
-                        Func<obj>(fun () -> repoRows available :> obj))
             |}
 
     refreshView ()
