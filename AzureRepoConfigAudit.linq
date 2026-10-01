@@ -2,11 +2,12 @@
   <IncludeUncapsulator>false</IncludeUncapsulator>
 </Query>
 
-// Azure DevOps repo configuration audit — finds unprotected default branches and policy drift.
+// Azure DevOps repo configuration audit — unprotected defaults, policy drift, force-push ACL risk.
 //
 // Shared prefs (same as AzurePackageAuditTool.linq):
 //   adoTargetsJson              — [{ "Org","Project" }]
-//   adoPat                      — Util.GetPassword (Code Read + Policy Read recommended)
+//   adoPat                      — Util.GetPassword
+//                                   Code (Read) + Policy (Read); Identity (Read) + Security for force-push ACLs
 //   azurePackageAuditSpiderOrgs — remembered org name(s) for spider
 //   azurePackageAuditReposJson  — included repos [{ Org, Project, Repo, RepoId, Branch }]
 //
@@ -16,9 +17,9 @@
 // Flow:
 //   0) Resolve org(s) → spider projects → repos (autocomplete catalog)
 //   1) Manage org/project targets (adoTargetsJson)
-//   2) Manage included repos (same UX / same repos pref as package audit; v dumps available)
-//   3) For each included repo: resolve default branch + effective branch policies
-//   4) Dump unprotected defaults first, then full policy matrix + config-signature groups
+//   2) Manage included repos (shared prefs; v=available; all=scan every discovered this run, don't save)
+//   3) For each selected repo: default-branch policies + Force push ACLs (repo + default branch)
+//   4) Dump unprotected / weak / force-push risk, then matrix + config-signature groups
 
 open System
 open System.Net
@@ -159,12 +160,22 @@ let repoSettingsPoliciesUrl (org: string) (project: string) (repoId: string) =
         (Uri.EscapeDataString project)
         (Uri.EscapeDataString repoId)
 
+let repoSettingsPermissionsUrl (org: string) (project: string) (repoId: string) =
+    sprintf
+        "https://dev.azure.com/%s/%s/_settings/repositories?repo=%s&_a=permissionsMid"
+        (Uri.EscapeDataString org)
+        (Uri.EscapeDataString project)
+        (Uri.EscapeDataString repoId)
+
 // --- HTTP / ADO ----------------------------------------------------------------
 
 let pat =
     let p = Util.GetPassword PrefPat
     if String.IsNullOrWhiteSpace p then
-        invalidOp (sprintf "Set Util password key '%s' (Code Read + Policy Read)." PrefPat)
+        invalidOp
+            (sprintf
+                "Set Util password key '%s' (Code Read, Policy Read; Identity Read + Security to read force-push ACLs)."
+                PrefPat)
     p.Trim()
 
 let parallelism =
@@ -543,6 +554,11 @@ let repoRows (repos: AuditRepo list) =
             Branch = r.Branch
         |})
 
+/// SavedIncluded = PrefReposJson; ScanAll = ephemeral discovered set for this run only.
+type RepoScanChoice =
+    | SavedIncluded of AuditRepo list
+    | ScanAll of AuditRepo list
+
 let manageRepos (client: HttpClient) (ts: AdoTarget list) (catalog: AdoAccessCatalog) =
     let mutable included = loadJsonList<AuditRepo> PrefReposJson |> sortRepos
     let mutable discovered: AuditRepo list = []
@@ -593,14 +609,27 @@ let manageRepos (client: HttpClient) (ts: AdoTarget list) (catalog: AdoAccessCat
         status <- sprintf "dumped %d available repo(s) expanded" available.Length
         refreshView ()
 
-    let rec loop () =
+    let rec loop () : RepoScanChoice =
         let cmd =
             promptLine
-                "Repos: [Enter]=continue, v=dump available, i=include#, x=exclude#, a=add, r=rediscover, c=clear"
+                "Repos: [Enter]=continue saved, all=scan every discovered (don't save), v=dump available, i=include#, x=exclude#, a=add, r=rediscover, c=clear"
                 ""
             |> fun s -> s.ToLowerInvariant()
         match cmd with
-        | "" | "q" | "done" | "continue" -> included
+        | "" | "q" | "done" | "continue" -> SavedIncluded included
+        | "all" | "*" | "scanall" | "scan-all" | "everything" ->
+            if discovered.IsEmpty then
+                status <- "scan-all cancelled — no discovered repos (try r=rediscover)"
+                refreshView ()
+                loop ()
+            else
+                status <-
+                    sprintf
+                        "scan-all: %d discovered repo(s) this run — saved included list unchanged (%d)"
+                        discovered.Length
+                        included.Length
+                refreshView ()
+                ScanAll discovered
         | "v" | "view" | "available" | "avail" ->
             dumpAvailableExpanded ()
             loop ()
@@ -775,16 +804,33 @@ let manageRepos (client: HttpClient) (ts: AdoTarget list) (catalog: AdoAccessCat
                 refreshView ()
             loop ()
         | _ ->
-            status <- "unknown command — use Enter / v / i / x / a / r / c"
+            status <- "unknown command — use Enter / all / v / i / x / a / r / c"
             refreshView ()
             loop ()
 
-    let final = loop ()
-    if final.IsEmpty then
-        invalidOp "No repos included. Use 'i' (from available) or 'a' to include repositories."
-    status <- sprintf "continuing with %d included repo(s)" final.Length
-    refreshView ()
-    final
+    match loop () with
+    | SavedIncluded final when final.IsEmpty ->
+        invalidOp
+            "No repos included. Use 'i'/'a' to save repos, or 'all' to scan every discovered repo this run without saving."
+    | SavedIncluded final ->
+        status <- sprintf "continuing with %d saved included repo(s)" final.Length
+        refreshView ()
+        {| Mode = "saved included"; RepoCount = final.Length |}.Dump("repo scan selection")
+        final
+    | ScanAll final ->
+        status <-
+            sprintf
+                "continuing with scan-all: %d discovered repo(s) — %s unchanged (%d saved)"
+                final.Length
+                PrefReposJson
+                included.Length
+        refreshView ()
+        {|
+            Mode = "scan-all (ephemeral)"
+            RepoCount = final.Length
+            SavedIncludedUnchanged = included.Length
+        |}.Dump("repo scan selection")
+        final
 
 // --- branch policy audit -------------------------------------------------------
 
@@ -807,12 +853,26 @@ let PolicyTypeCommentRequirements = "c6a1889d-b943-4856-b76f-9e46bb6b0df2"
 [<Literal>]
 let PolicyTypeMergeStrategy = "fa4e907d-c16b-4a4c-9dfa-4916e5d171ab"
 
+[<Literal>]
+let GitReposSecurityNamespace = "2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87"
+
+[<Literal>]
+let ForcePushPermissionBit = 8
+
 type PolicyHit = {
     Id: int
     TypeId: string
     TypeName: string
     IsEnabled: bool
     IsBlocking: bool
+}
+
+type ForcePushAce = {
+    Descriptor: string
+    DisplayName: string
+    Scope: string // project | repo | branch
+    Allow: bool
+    Deny: bool
 }
 
 type RepoConfigRow = {
@@ -833,10 +893,208 @@ type RepoConfigRow = {
     ConfigSignature: string
     Unprotected: bool
     WeakProtection: bool
+    ForcePushAllowedCount: int
+    ForcePushBroadAllow: bool
+    ForcePushAllowedIdentities: string
+    ForcePushRisk: bool
+    ForcePushRiskReason: string
     Notes: string
     PoliciesUrl: Hyperlinq
+    PermissionsUrl: Hyperlinq
     RepoUrl: Hyperlinq
 }
+
+let projectIdCache = System.Collections.Concurrent.ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+let identityNameCache = System.Collections.Concurrent.ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+
+let getProjectId (client: HttpClient) (org: string) (project: string) =
+    let key = sprintf "%s|%s" org project
+    match projectIdCache.TryGetValue key with
+    | true, id -> id
+    | _ ->
+        let url =
+            sprintf
+                "https://dev.azure.com/%s/_apis/projects/%s?api-version=7.1"
+                (Uri.EscapeDataString org)
+                (Uri.EscapeDataString project)
+        use doc = readJson client HttpMethod.Get url None
+        let id = propStr doc.RootElement "id"
+        if String.IsNullOrWhiteSpace id then
+            failwith (sprintf "project id missing for %s/%s" org project)
+        projectIdCache.[key] <- id
+        id
+
+let resolveIdentityDisplayName (client: HttpClient) (org: string) (descriptor: string) =
+    if String.IsNullOrWhiteSpace descriptor then descriptor
+    else
+        match identityNameCache.TryGetValue descriptor with
+        | true, name -> name
+        | _ ->
+            let name =
+                try
+                    let url =
+                        sprintf
+                            "https://vssps.dev.azure.com/%s/_apis/identities?descriptors=%s&api-version=7.1"
+                            (Uri.EscapeDataString org)
+                            (Uri.EscapeDataString descriptor)
+                    use doc = readJson client HttpMethod.Get url None
+                    match propArr doc.RootElement "value" with
+                    | h :: _ ->
+                        let display = propStr h "providerDisplayName"
+                        let custom = propStr h "customDisplayName"
+                        let principal =
+                            match h.TryGetProperty "properties" with
+                            | true, props ->
+                                match props.TryGetProperty "Account" with
+                                | true, acct when acct.ValueKind = JsonValueKind.Object ->
+                                    propStr acct "$value"
+                                | _ -> null
+                            | _ -> null
+                        [ custom; display; principal ]
+                        |> List.choose (fun s ->
+                            if String.IsNullOrWhiteSpace s then None else Some s)
+                        |> List.tryHead
+                        |> Option.defaultValue descriptor
+                    | _ -> descriptor
+                with _ -> descriptor
+            identityNameCache.[descriptor] <- name
+            name
+
+let branchTokenUtf16Hex (branch: string) =
+    Encoding.Unicode.GetBytes(normalizeBranch branch)
+    |> Array.map (fun b -> b.ToString("x2"))
+    |> String.concat ""
+
+let gitSecurityTokens (projectId: string) (repoId: string) (branch: string) =
+    let projectToken = sprintf "repoV2/%s" projectId
+    let repoToken = sprintf "repoV2/%s/%s" projectId repoId
+    let branchToken =
+        sprintf "repoV2/%s/%s/refs/heads/%s/" projectId repoId (branchTokenUtf16Hex branch)
+    [
+        "project", projectToken
+        "repo", repoToken
+        "branch", branchToken
+    ]
+
+let hasPermissionBit (mask: int) (bit: int) = (mask &&& bit) <> 0
+
+let readAceMasks (ace: JsonElement) =
+    let allow =
+        match ace.TryGetProperty "allow" with
+        | true, p when p.ValueKind = JsonValueKind.Number -> p.GetInt32()
+        | _ -> 0
+    let deny =
+        match ace.TryGetProperty "deny" with
+        | true, p when p.ValueKind = JsonValueKind.Number -> p.GetInt32()
+        | _ -> 0
+    let effAllow, effDeny =
+        match ace.TryGetProperty "extendedInfo" with
+        | true, ext ->
+            let ea =
+                match ext.TryGetProperty "effectiveAllow" with
+                | true, p when p.ValueKind = JsonValueKind.Number -> p.GetInt32()
+                | _ -> allow
+            let ed =
+                match ext.TryGetProperty "effectiveDeny" with
+                | true, p when p.ValueKind = JsonValueKind.Number -> p.GetInt32()
+                | _ -> deny
+            ea, ed
+        | _ -> allow, deny
+    effAllow, effDeny
+
+let listForcePushAcesForToken (client: HttpClient) (org: string) (token: string) (scope: string) =
+    let url =
+        sprintf
+            "https://dev.azure.com/%s/_apis/accesscontrollists/%s?token=%s&includeExtendedInfo=true&api-version=7.1"
+            (Uri.EscapeDataString org)
+            GitReposSecurityNamespace
+            (Uri.EscapeDataString token)
+    use doc = readJson client HttpMethod.Get url None
+    propArr doc.RootElement "value"
+    |> List.collect (fun acl ->
+        let aces =
+            match acl.TryGetProperty "acesDictionary" with
+            | true, map when map.ValueKind = JsonValueKind.Object ->
+                map.EnumerateObject()
+                |> Seq.map (fun prop -> prop.Value)
+                |> Seq.toList
+            | true, arr when arr.ValueKind = JsonValueKind.Array ->
+                arr.EnumerateArray() |> Seq.toList
+            | _ -> []
+        aces
+        |> List.choose (fun ace ->
+            let descriptor = propStr ace "descriptor" |> fun s -> if isNull s then "" else s
+            let effAllow, effDeny = readAceMasks ace
+            let allowFp = hasPermissionBit effAllow ForcePushPermissionBit
+            let denyFp = hasPermissionBit effDeny ForcePushPermissionBit
+            if not allowFp && not denyFp then None
+            else
+                Some
+                    {
+                        Descriptor = descriptor
+                        DisplayName = resolveIdentityDisplayName client org descriptor
+                        Scope = scope
+                        Allow = allowFp && not denyFp
+                        Deny = denyFp
+                    }))
+
+let isBroadIdentity (displayName: string) =
+    let n = if isNull displayName then "" else displayName
+    [
+        "Contributors"
+        "Readers"
+        "Project Valid Users"
+        "Project Collection Valid Users"
+        "Everyone"
+        "Endpoint Creators"
+    ]
+    |> List.exists (fun needle -> n.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0)
+
+let isLikelyAdminIdentity (displayName: string) =
+    let n = if isNull displayName then "" else displayName
+    [
+        "Project Collection Administrators"
+        "Project Administrators"
+        "Team Foundation Administrators"
+    ]
+    |> List.exists (fun needle -> n.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0)
+
+let auditForcePush
+    (client: HttpClient)
+    (org: string)
+    (project: string)
+    (repoId: string)
+    (branch: string)
+    : Result<ForcePushAce list * string, string> =
+    try
+        let projectId = getProjectId client org project
+        let tokens = gitSecurityTokens projectId repoId branch
+        let aces =
+            tokens
+            |> List.collect (fun (scope, token) ->
+                try listForcePushAcesForToken client org token scope
+                with ex ->
+                    // Branch token may 404 when no explicit ACL exists; treat as empty.
+                    let msg = ex.Message
+                    if
+                        msg.IndexOf("NotFound", StringComparison.OrdinalIgnoreCase) >= 0
+                        || msg.IndexOf("404", StringComparison.OrdinalIgnoreCase) >= 0
+                    then
+                        []
+                    else
+                        raise ex)
+            // Prefer most-specific scope when same descriptor appears multiple times.
+            |> List.groupBy (fun a -> a.Descriptor.ToLowerInvariant())
+            |> List.map (fun (_, group) ->
+                let rank =
+                    function
+                    | "branch" -> 3
+                    | "repo" -> 2
+                    | _ -> 1
+                group |> List.maxBy (fun a -> rank a.Scope))
+        Ok(aces, "")
+    with ex ->
+        Error ex.Message
 
 let getRepoDefaultBranch (client: HttpClient) (r: AuditRepo) =
     let idOrName = if String.IsNullOrWhiteSpace r.RepoId then r.Repo else r.RepoId
@@ -915,6 +1173,29 @@ let auditRepoConfig (client: HttpClient) (r: AuditRepo) : Result<RepoConfigRow, 
                 |> List.map (fun p -> p.TypeName)
                 |> List.distinctBy (fun s -> s.ToLowerInvariant())
                 |> List.sortBy (fun s -> s.ToLowerInvariant())
+
+            let forceAces, forceNote =
+                match auditForcePush client r.Org r.Project meta.RepoId meta.DefaultBranch with
+                | Ok(aces, _) -> aces, ""
+                | Error msg -> [], sprintf "force-push ACL read failed: %s" msg
+
+            let allowed =
+                forceAces
+                |> List.filter (fun a -> a.Allow)
+                |> List.sortBy (fun a -> a.DisplayName.ToLowerInvariant())
+            let broadAllows = allowed |> List.filter (fun a -> isBroadIdentity a.DisplayName)
+            let nonAdminAllows =
+                allowed
+                |> List.filter (fun a ->
+                    not (isBroadIdentity a.DisplayName) && not (isLikelyAdminIdentity a.DisplayName))
+            let forcePushRisk = not broadAllows.IsEmpty || not nonAdminAllows.IsEmpty
+            let forcePushRiskReason =
+                match not broadAllows.IsEmpty, not nonAdminAllows.IsEmpty with
+                | true, true -> "broad group + non-admin identity"
+                | true, false -> "broad group"
+                | false, true -> "non-admin identity"
+                | false, false -> ""
+
             let signatureParts =
                 [
                     if hasMin then "min-reviewers"
@@ -923,6 +1204,8 @@ let auditRepoConfig (client: HttpClient) (r: AuditRepo) : Result<RepoConfigRow, 
                     if hasWi then "work-item"
                     if hasComment then "comments"
                     if hasMerge then "merge-strategy"
+                    if forcePushRisk then "force-push-open"
+                    elif allowed.IsEmpty && String.IsNullOrWhiteSpace forceNote then "force-push-locked"
                     for extra in typeNames do
                         let known =
                             extra.IndexOf("reviewer", StringComparison.OrdinalIgnoreCase) >= 0
@@ -942,11 +1225,17 @@ let auditRepoConfig (client: HttpClient) (r: AuditRepo) : Result<RepoConfigRow, 
                 not unprotected
                 && not hasMin
                 && not hasReq
+            let allowedSummary =
+                allowed
+                |> List.map (fun a -> sprintf "%s [%s]" a.DisplayName a.Scope)
+                |> fun xs -> String.Join("; ", xs)
+            // Force-push detail lives in ForcePushAllowedIdentities / ForcePushBroadAllow columns.
             let notes =
                 [
                     if unprotected then "no enabled branch policies on default branch"
                     if weak then "policies present but no reviewer requirement"
                     if blocking.IsEmpty && not enabled.IsEmpty then "enabled policies are non-blocking"
+                    if not (String.IsNullOrWhiteSpace forceNote) then forceNote
                 ]
                 |> fun xs -> String.Join("; ", xs)
             Ok
@@ -968,9 +1257,16 @@ let auditRepoConfig (client: HttpClient) (r: AuditRepo) : Result<RepoConfigRow, 
                     ConfigSignature = signature
                     Unprotected = unprotected
                     WeakProtection = weak
+                    ForcePushAllowedCount = allowed.Length
+                    ForcePushBroadAllow = not broadAllows.IsEmpty
+                    ForcePushAllowedIdentities = allowedSummary
+                    ForcePushRisk = forcePushRisk
+                    ForcePushRiskReason = forcePushRiskReason
                     Notes = notes
                     PoliciesUrl =
                         Hyperlinq(repoSettingsPoliciesUrl r.Org r.Project meta.RepoId, "policies")
+                    PermissionsUrl =
+                        Hyperlinq(repoSettingsPermissionsUrl r.Org r.Project meta.RepoId, "permissions")
                     RepoUrl =
                         Hyperlinq(repoPoliciesUrl r.Org r.Project meta.Repo meta.DefaultBranch, meta.DefaultBranch)
                 }
@@ -985,7 +1281,7 @@ let auditAllRepos (client: HttpClient) (repos: AuditRepo list) =
         results
         |> List.choose (function Ok x -> Some x | _ -> None)
         |> List.sortBy (fun r ->
-            (if r.Unprotected then 0 elif r.WeakProtection then 1 else 2),
+            (if r.ForcePushRisk then 0 elif r.Unprotected then 1 elif r.WeakProtection then 2 else 3),
             r.Org.ToLowerInvariant(),
             r.Project.ToLowerInvariant(),
             r.Repo.ToLowerInvariant())
@@ -1016,19 +1312,23 @@ let targets = manageTargets accessCatalog
 
 let includedRepos = manageRepos client targets accessCatalog
 
-"scanning default-branch policies…".Dump("policy audit")
+"scanning default-branch policies + force-push ACLs…".Dump("policy audit")
 let rows, auditErrors = auditAllRepos client includedRepos
 if not auditErrors.IsEmpty then
     auditErrors.Dump("policy audit errors")
 
 let unprotected = rows |> List.filter (fun r -> r.Unprotected)
 let weak = rows |> List.filter (fun r -> r.WeakProtection)
-let protectedOk = rows |> List.filter (fun r -> not r.Unprotected && not r.WeakProtection)
+let forcePushRiskRows = rows |> List.filter (fun r -> r.ForcePushRisk)
+let protectedOk =
+    rows
+    |> List.filter (fun r -> not r.Unprotected && not r.WeakProtection && not r.ForcePushRisk)
 
 {|
     Scanned = rows.Length
     UnprotectedDefaultBranch = unprotected.Length
     WeakProtection = weak.Length
+    ForcePushRisk = forcePushRiskRows.Length
     LooksProtected = protectedOk.Length
     Errors = auditErrors.Length
     DistinctConfigSignatures =
@@ -1038,6 +1338,22 @@ let protectedOk = rows |> List.filter (fun r -> not r.Unprotected && not r.WeakP
         |> List.length
 |}.Dump("summary")
 
+forcePushRiskRows
+|> List.map (fun r ->
+    {|
+        Org = r.Org
+        Project = r.Project
+        Repo = r.Repo
+        DefaultBranch = r.RepoUrl
+        RiskReason = r.ForcePushRiskReason
+        BroadGroupAllow = r.ForcePushBroadAllow
+        AllowedCount = r.ForcePushAllowedCount
+        AllowedIdentities = r.ForcePushAllowedIdentities
+        Notes = r.Notes
+        Permissions = r.PermissionsUrl
+    |})
+|> fun xs -> xs.Dump(sprintf "FORCE PUSH RISK (%d)" xs.Length)
+
 unprotected
 |> List.map (fun r ->
     {|
@@ -1045,8 +1361,10 @@ unprotected
         Project = r.Project
         Repo = r.Repo
         DefaultBranch = r.RepoUrl
+        ForcePushRisk = r.ForcePushRisk
         Notes = r.Notes
         Policies = r.PoliciesUrl
+        Permissions = r.PermissionsUrl
     |})
 |> fun xs -> xs.Dump(sprintf "UNPROTECTED default branches (%d) — no enabled policies" xs.Length)
 
@@ -1058,8 +1376,10 @@ weak
         Repo = r.Repo
         DefaultBranch = r.RepoUrl
         PolicyTypes = r.PolicyTypes
+        ForcePushRisk = r.ForcePushRisk
         Notes = r.Notes
         Policies = r.PoliciesUrl
+        Permissions = r.PermissionsUrl
     |})
 |> fun xs -> xs.Dump(sprintf "weak protection (%d) — policies but no reviewer requirement" xs.Length)
 
@@ -1067,7 +1387,8 @@ rows
 |> List.map (fun r ->
     {|
         Risk =
-            if r.Unprotected then "UNPROTECTED"
+            if r.ForcePushRisk then sprintf "FORCE-PUSH (%s)" r.ForcePushRiskReason
+            elif r.Unprotected then "UNPROTECTED"
             elif r.WeakProtection then "weak"
             else "ok"
         Org = r.Org
@@ -1082,12 +1403,17 @@ rows
         WorkItemLinking = r.HasWorkItemLinking
         CommentRequirements = r.HasCommentRequirements
         MergeStrategy = r.HasMergeStrategy
+        ForcePushAllowedCount = r.ForcePushAllowedCount
+        ForcePushBroadAllow = r.ForcePushBroadAllow
+        ForcePushAllowedIdentities = r.ForcePushAllowedIdentities
+        ForcePushRiskReason = r.ForcePushRiskReason
         PolicyTypes = r.PolicyTypes
         ConfigSignature = r.ConfigSignature
         Notes = r.Notes
         Policies = r.PoliciesUrl
+        Permissions = r.PermissionsUrl
     |})
-|> fun xs -> xs.Dump(sprintf "all repos policy matrix (%d)" xs.Length)
+|> fun xs -> xs.Dump(sprintf "all repos policy + force-push matrix (%d)" xs.Length)
 
 rows
 |> List.groupBy (fun r -> r.ConfigSignature)
@@ -1096,6 +1422,7 @@ rows
         ConfigSignature = configSig
         RepoCount = group.Length
         Unprotected = group |> List.filter (fun r -> r.Unprotected) |> List.length
+        ForcePushRisk = group |> List.filter (fun r -> r.ForcePushRisk) |> List.length
         Repos =
             group
             |> List.map (fun r -> sprintf "%s/%s/%s" r.Org r.Project r.Repo)
@@ -1106,7 +1433,8 @@ rows
 |> fun xs -> xs.Dump(sprintf "config signature groups (%d) — policy drift view" xs.Length)
 
 sprintf
-    "done — %d unprotected, %d weak, %d ok (of %d scanned)"
+    "done — %d force-push risk, %d unprotected, %d weak, %d ok (of %d scanned)"
+    forcePushRiskRows.Length
     unprotected.Length
     weak.Length
     protectedOk.Length
